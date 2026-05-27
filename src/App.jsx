@@ -27,20 +27,70 @@ const ACTIVE_CONFIG = { green: { emoji:"🟢", label:"Active",   color: C.green,
 const WEEKLY_GOALS = { perfectDays: 3, workouts: 4, dietGreen: 4, dietRed: 1, activeGreen: 4 };
 
 const EXERCISES = {
-  bench:"Bench Press", incline:"Incline Bench", db_fly:"DB Fly", cable_fly:"Cable Fly", dip:"Weighted Dip",
-  deadlift:"Deadlift", row:"Barbell Row", pullup:"Pull-Up", lat:"Lat Pulldown", cable_row:"Cable Row", db_row:"DB Row",
-  squat:"Back Squat", leg_press:"Leg Press", rdl:"Romanian Deadlift", leg_curl:"Leg Curl", lunge:"Walking Lunge",
-  hack_squat:"Hack Squat", calf_raise:"Calf Raise", ohp:"Overhead Press", lateral:"Lateral Raise",
-  curl:"Barbell Curl", hammer:"Hammer Curl", tricep_push:"Tricep Pushdown", skull:"Skull Crusher",
-  zone2:"Zone 2 Cardio", stairmaster:"Stairmaster", burpee:"Burpees", kb_swing:"KB Swing",
+  // Push
+  bench:"Bench Press", incline:"Incline Bench", db_bench:"DB Bench Press", incline_db:"Incline DB Press",
+  db_fly:"DB Fly", cable_fly:"Cable Fly", dip:"Weighted Dip", pushup:"Push-Up",
+  ohp:"Overhead Press", db_ohp:"DB Shoulder Press", arnold:"Arnold Press", push_press:"Push Press",
+  lateral:"Lateral Raise", front_raise:"Front Raise", rear_delt:"Rear Delt Fly",
+  close_grip_bench:"Close Grip Bench",
+  // Pull
+  deadlift:"Deadlift", sumo_dl:"Sumo Deadlift", trap_bar_dl:"Trap Bar Deadlift",
+  row:"Barbell Row", pendlay_row:"Pendlay Row", t_bar_row:"T-Bar Row",
+  pullup:"Pull-Up", chinup:"Chin-Up", lat:"Lat Pulldown", cable_row:"Cable Row", db_row:"DB Row",
+  face_pull:"Face Pull", shrug:"Shrugs",
+  // Legs
+  squat:"Back Squat", front_squat:"Front Squat", goblet_squat:"Goblet Squat",
+  leg_press:"Leg Press", hack_squat:"Hack Squat", bulgarian:"Bulgarian Split Squat",
+  lunge:"Walking Lunge", reverse_lunge:"Reverse Lunge", step_up:"Step-Up",
+  rdl:"Romanian Deadlift", good_morning:"Good Morning",
+  leg_curl:"Leg Curl", leg_ext:"Leg Extension", nordic:"Nordic Curl",
+  hip_thrust:"Hip Thrust", glute_bridge:"Glute Bridge",
+  calf_raise:"Calf Raise",
+  // Arms
+  curl:"Barbell Curl", hammer:"Hammer Curl", preacher_curl:"Preacher Curl",
+  cable_curl:"Cable Curl", concentration_curl:"Concentration Curl",
+  tricep_push:"Tricep Pushdown", skull:"Skull Crusher", overhead_tri:"Overhead Tricep Extension",
+  rope_pushdown:"Rope Pushdown",
+  // Full Body
+  burpee:"Burpees", kb_swing:"KB Swing", clean_press:"Clean & Press", thruster:"Thruster",
+  farmers:"Farmer's Carry", med_ball:"Med Ball Slam", turkish:"Turkish Get-Up", box_jump:"Box Jump",
+  plank:"Plank", russian_twist:"Russian Twist", hanging_leg:"Hanging Leg Raise",
+  // Cardio
+  zone2:"Zone 2 Cardio", stairmaster:"Stairmaster", rowing:"Rowing Machine",
+  bike:"Stationary Bike", treadmill:"Treadmill Run", jump_rope:"Jump Rope",
 };
 const EX_META = {
-  bench:{muscle:"Chest",cat:"Push"}, incline:{muscle:"Chest",cat:"Push"}, db_fly:{muscle:"Chest",cat:"Push"}, cable_fly:{muscle:"Chest",cat:"Push"}, dip:{muscle:"Chest",cat:"Push"},
-  deadlift:{muscle:"Back",cat:"Pull"}, row:{muscle:"Back",cat:"Pull"}, pullup:{muscle:"Back",cat:"Pull"}, lat:{muscle:"Back",cat:"Pull"}, cable_row:{muscle:"Back",cat:"Pull"}, db_row:{muscle:"Back",cat:"Pull"},
-  squat:{muscle:"Quads",cat:"Legs"}, leg_press:{muscle:"Quads",cat:"Legs"}, rdl:{muscle:"Hamstrings",cat:"Legs"}, leg_curl:{muscle:"Hamstrings",cat:"Legs"}, lunge:{muscle:"Quads",cat:"Legs"},
-  hack_squat:{muscle:"Quads",cat:"Legs"}, calf_raise:{muscle:"Calves",cat:"Legs"}, ohp:{muscle:"Shoulders",cat:"Push"}, lateral:{muscle:"Shoulders",cat:"Push"},
-  curl:{muscle:"Biceps",cat:"Arms"}, hammer:{muscle:"Biceps",cat:"Arms"}, tricep_push:{muscle:"Triceps",cat:"Arms"}, skull:{muscle:"Triceps",cat:"Arms"},
-  zone2:{muscle:"Cardio",cat:"Cardio"}, stairmaster:{muscle:"Cardio",cat:"Cardio"}, burpee:{muscle:"Full Body",cat:"Cardio"}, kb_swing:{muscle:"Full Body",cat:"Cardio"},
+  // Push
+  bench:{muscle:"Chest",cat:"Push"}, incline:{muscle:"Chest",cat:"Push"}, db_bench:{muscle:"Chest",cat:"Push"}, incline_db:{muscle:"Chest",cat:"Push"},
+  db_fly:{muscle:"Chest",cat:"Push"}, cable_fly:{muscle:"Chest",cat:"Push"}, dip:{muscle:"Chest",cat:"Push"}, pushup:{muscle:"Chest",cat:"Push"},
+  ohp:{muscle:"Shoulders",cat:"Push"}, db_ohp:{muscle:"Shoulders",cat:"Push"}, arnold:{muscle:"Shoulders",cat:"Push"}, push_press:{muscle:"Shoulders",cat:"Push"},
+  lateral:{muscle:"Shoulders",cat:"Push"}, front_raise:{muscle:"Shoulders",cat:"Push"}, rear_delt:{muscle:"Shoulders",cat:"Push"},
+  close_grip_bench:{muscle:"Triceps",cat:"Push"},
+  // Pull
+  deadlift:{muscle:"Back",cat:"Pull"}, sumo_dl:{muscle:"Back",cat:"Pull"}, trap_bar_dl:{muscle:"Back",cat:"Pull"},
+  row:{muscle:"Back",cat:"Pull"}, pendlay_row:{muscle:"Back",cat:"Pull"}, t_bar_row:{muscle:"Back",cat:"Pull"},
+  pullup:{muscle:"Back",cat:"Pull"}, chinup:{muscle:"Back",cat:"Pull"}, lat:{muscle:"Back",cat:"Pull"}, cable_row:{muscle:"Back",cat:"Pull"}, db_row:{muscle:"Back",cat:"Pull"},
+  face_pull:{muscle:"Shoulders",cat:"Pull"}, shrug:{muscle:"Traps",cat:"Pull"},
+  // Legs
+  squat:{muscle:"Quads",cat:"Legs"}, front_squat:{muscle:"Quads",cat:"Legs"}, goblet_squat:{muscle:"Quads",cat:"Legs"},
+  leg_press:{muscle:"Quads",cat:"Legs"}, hack_squat:{muscle:"Quads",cat:"Legs"}, bulgarian:{muscle:"Quads",cat:"Legs"},
+  lunge:{muscle:"Quads",cat:"Legs"}, reverse_lunge:{muscle:"Quads",cat:"Legs"}, step_up:{muscle:"Quads",cat:"Legs"},
+  rdl:{muscle:"Hamstrings",cat:"Legs"}, good_morning:{muscle:"Hamstrings",cat:"Legs"},
+  leg_curl:{muscle:"Hamstrings",cat:"Legs"}, leg_ext:{muscle:"Quads",cat:"Legs"}, nordic:{muscle:"Hamstrings",cat:"Legs"},
+  hip_thrust:{muscle:"Glutes",cat:"Legs"}, glute_bridge:{muscle:"Glutes",cat:"Legs"},
+  calf_raise:{muscle:"Calves",cat:"Legs"},
+  // Arms
+  curl:{muscle:"Biceps",cat:"Arms"}, hammer:{muscle:"Biceps",cat:"Arms"}, preacher_curl:{muscle:"Biceps",cat:"Arms"},
+  cable_curl:{muscle:"Biceps",cat:"Arms"}, concentration_curl:{muscle:"Biceps",cat:"Arms"},
+  tricep_push:{muscle:"Triceps",cat:"Arms"}, skull:{muscle:"Triceps",cat:"Arms"}, overhead_tri:{muscle:"Triceps",cat:"Arms"},
+  rope_pushdown:{muscle:"Triceps",cat:"Arms"},
+  // Full Body
+  burpee:{muscle:"Full Body",cat:"Full Body"}, kb_swing:{muscle:"Full Body",cat:"Full Body"}, clean_press:{muscle:"Full Body",cat:"Full Body"}, thruster:{muscle:"Full Body",cat:"Full Body"},
+  farmers:{muscle:"Full Body",cat:"Full Body"}, med_ball:{muscle:"Full Body",cat:"Full Body"}, turkish:{muscle:"Full Body",cat:"Full Body"}, box_jump:{muscle:"Full Body",cat:"Full Body"},
+  plank:{muscle:"Core",cat:"Full Body"}, russian_twist:{muscle:"Core",cat:"Full Body"}, hanging_leg:{muscle:"Core",cat:"Full Body"},
+  // Cardio
+  zone2:{muscle:"Cardio",cat:"Cardio"}, stairmaster:{muscle:"Cardio",cat:"Cardio"}, rowing:{muscle:"Cardio",cat:"Cardio"},
+  bike:{muscle:"Cardio",cat:"Cardio"}, treadmill:{muscle:"Cardio",cat:"Cardio"}, jump_rope:{muscle:"Cardio",cat:"Cardio"},
 };
 
 const DEFAULT_BOARDS = [
@@ -560,7 +610,7 @@ function IronTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, on
                     <span style={{fontSize:18}}>{day.icon}</span>
                     <div>
                       <div style={{fontSize:13,color:C.text,fontFamily:MONO}}>{day.name}</div>
-                      <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{day.exercises.slice(0,3).map(id=>EXERCISES[id]).join(" · ")}{day.exercises.length>3?` +${day.exercises.length-3}`:""}</div>
+                      <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{day.exercises.slice(0,3).map(id=>EXERCISES[id]||id).join(" · ")}{day.exercises.length>3?` +${day.exercises.length-3}`:""}</div>
                     </div>
                   </div>
                   <span style={{color:C.accent,fontSize:12,fontFamily:MONO,fontWeight:700}}>Start →</span>
@@ -1108,7 +1158,12 @@ function WorkoutScreen({
   mode = "live",
   initialDate = null,
   initialElapsedSec = 0,
+  customExercises = {},
+  onAddCustom = null,
 }) {
+  // Merged catalogs that include user-created exercises
+  const mergedNames = {...EXERCISES, ...Object.fromEntries(Object.entries(customExercises).map(([id,c])=>[id,c.name]))};
+  const mergedMeta  = {...EX_META,    ...Object.fromEntries(Object.entries(customExercises).map(([id,c])=>[id,{muscle:c.muscle, cat:c.cat}]))};
   const [exercises, setExercises] = useState(() =>
     initialBlocks || initExercises.map(id=>({id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}))
   );
@@ -1130,9 +1185,11 @@ function WorkoutScreen({
   function e1RM(w,r){if(!w||!r)return 0;return Math.round(w*(1+r/30));}
   const done=compSets(exercises); const vol=totalVol(exercises);
   const canSave = isLive ? done > 0 : true;
-  const ALL_EX=Object.entries(EXERCISES);
+  const ALL_EX=Object.entries(mergedNames);
   const [exSearch,setExSearch]=useState(""); const [exCat,setExCat]=useState("All");
-  const filteredEx=ALL_EX.filter(([id,name])=>{const m=EX_META[id];return name.toLowerCase().includes(exSearch.toLowerCase())&&(exCat==="All"||m?.cat===exCat);});
+  const [creatingCustom,setCreatingCustom]=useState(false);
+  const [newExName,setNewExName]=useState(""); const [newExMuscle,setNewExMuscle]=useState("Quads"); const [newExCat,setNewExCat]=useState("Legs");
+  const filteredEx=ALL_EX.filter(([id,name])=>{const m=mergedMeta[id];return name.toLowerCase().includes(exSearch.toLowerCase())&&(exCat==="All"||m?.cat===exCat);});
 
   function handleSave() {
     const finalDate = isLive ? new Date().toISOString() : new Date(date + "T12:00:00").toISOString();
@@ -1179,7 +1236,7 @@ function WorkoutScreen({
       {restLeft!==null&&<div style={{display:"flex",alignItems:"center",gap:10,background:C.card,borderBottom:`1px solid ${C.border}`,padding:"8px 16px"}}><span style={{color:C.accent}}>⏱</span><span style={{fontSize:16,fontWeight:700,color:C.accent,fontFamily:MONO,flex:1}}>{formatTime(restLeft)}</span><button style={{background:"transparent",border:"none",color:C.dim,fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={()=>{clearInterval(restRef.current);setRestLeft(null);}}>skip</button></div>}
       <div style={{padding:"12px 12px 100px"}}>
         {exercises.map((item,ei)=>{
-          const exName=EXERCISES[item.exId]||item.exId; const meta=EX_META[item.exId];
+          const exName=mergedNames[item.exId]||item.exId; const meta=mergedMeta[item.exId];
           const exVol=item.sets.reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
           const bestRM=item.sets.reduce((b,s)=>Math.max(b,e1RM(parseFloat(s.weight),parseInt(s.reps))),0);
           return(
@@ -1219,16 +1276,52 @@ function WorkoutScreen({
             <div style={{display:"flex",justifyContent:"space-between",padding:"16px 18px",borderBottom:`1px solid ${C.border}`}}><span style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Add Exercise</span><button style={{background:"transparent",border:"none",color:C.muted,fontSize:16,cursor:"pointer"}} onClick={()=>setShowPicker(false)}>✕</button></div>
             <input style={{background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"10px 14px",fontSize:13,margin:"12px 16px 0",outline:"none",fontFamily:MONO}} placeholder="Search…" value={exSearch} onChange={e=>setExSearch(e.target.value)} autoFocus/>
             <div style={{display:"flex",gap:6,padding:"10px 16px",overflowX:"auto",flexShrink:0}}>
-              {["All","Push","Pull","Legs","Arms","Cardio"].map(c=><button key={c} style={{borderRadius:20,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO,whiteSpace:"nowrap",flexShrink:0,background:exCat===c?C.accent:"#1a1a1a",color:exCat===c?"#000":C.muted,border:exCat===c?"none":`1px solid ${C.border}`}} onClick={()=>setExCat(c)}>{c}</button>)}
+              {["All","Push","Pull","Legs","Arms","Full Body","Cardio"].map(c=><button key={c} style={{borderRadius:20,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO,whiteSpace:"nowrap",flexShrink:0,background:exCat===c?C.accent:"#1a1a1a",color:exCat===c?"#000":C.muted,border:exCat===c?"none":`1px solid ${C.border}`}} onClick={()=>setExCat(c)}>{c}</button>)}
             </div>
             <div style={{overflowY:"auto",padding:"0 12px 24px"}}>
-              {filteredEx.map(([id,name])=>(
-                <button key={id} style={{width:"100%",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.text,padding:"11px 14px",marginBottom:6,cursor:"pointer",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}
-                  onClick={()=>{setExercises([...exercises,{id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}]);setShowPicker(false);}}>
-                  <span style={{fontSize:13,fontFamily:MONO,color:C.text}}>{name}</span>
-                  <span style={{fontSize:11,color:C.dim,fontFamily:MONO}}>{EX_META[id]?.muscle}</span>
-                </button>
-              ))}
+              {creatingCustom ? (
+                <div style={{background:"#161616",border:`1px solid ${C.accent}`,borderRadius:10,padding:14,marginBottom:8}}>
+                  <div style={{fontSize:11,color:C.accent,fontFamily:MONO,marginBottom:10,letterSpacing:"0.1em",fontWeight:700}}>NEW CUSTOM EXERCISE</div>
+                  <input autoFocus value={newExName} onChange={e=>setNewExName(e.target.value)} placeholder="Name (e.g. Bulgarian Split Squat)"
+                    style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+                  <div style={{display:"flex",gap:8,marginBottom:10}}>
+                    <select value={newExMuscle} onChange={e=>setNewExMuscle(e.target.value)}
+                      style={{flex:1,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
+                      {["Chest","Back","Shoulders","Biceps","Triceps","Traps","Quads","Hamstrings","Glutes","Calves","Core","Cardio","Full Body","Other"].map(m=><option key={m} value={m}>{m}</option>)}
+                    </select>
+                    <select value={newExCat} onChange={e=>setNewExCat(e.target.value)}
+                      style={{flex:1,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
+                      {["Push","Pull","Legs","Arms","Full Body","Cardio"].map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button style={{flex:1,background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:newExName.trim()?"pointer":"default",fontFamily:MONO,opacity:newExName.trim()?1:0.4}}
+                      onClick={()=>{
+                        if (!newExName.trim() || !onAddCustom) return;
+                        const newId = onAddCustom(newExName, newExMuscle, newExCat);
+                        setExercises([...exercises,{id:uid(),exId:newId,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}]);
+                        setNewExName(""); setCreatingCustom(false); setShowPicker(false);
+                      }}>Create + Add</button>
+                    <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setCreatingCustom(false);setNewExName("");}}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.accent}`,borderRadius:10,color:C.accent,padding:"10px 14px",marginBottom:10,cursor:"pointer",fontFamily:MONO,fontSize:12,letterSpacing:"0.05em"}}
+                  onClick={()=>setCreatingCustom(true)}>+ Create custom exercise</button>
+              )}
+              {filteredEx.map(([id,name])=>{
+                const isCustom = !!customExercises[id];
+                return (
+                  <button key={id} style={{width:"100%",background:"transparent",border:`1px solid ${isCustom?C.purple+"55":C.border}`,borderRadius:10,color:C.text,padding:"11px 14px",marginBottom:6,cursor:"pointer",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}
+                    onClick={()=>{setExercises([...exercises,{id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}]);setShowPicker(false);}}>
+                    <span style={{fontSize:13,fontFamily:MONO,color:C.text}}>
+                      {name}
+                      {isCustom && <span style={{fontSize:9,color:C.purple,marginLeft:6,letterSpacing:"0.05em"}}>CUSTOM</span>}
+                    </span>
+                    <span style={{fontSize:11,color:C.dim,fontFamily:MONO}}>{mergedMeta[id]?.muscle}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -1596,6 +1689,12 @@ export default function App() {
   const [activeLog, setActiveLog] = usePersistedState("activeLog", {});
   const [focusSessions, setFocusSessions] = usePersistedState("focusSessions", []);
   const [boards, setBoards] = usePersistedState("boards", DEFAULT_BOARDS);
+  const [customExercises, setCustomExercises] = usePersistedState("customExercises", {}); // { id: { name, muscle, cat } }
+  function addCustomExercise(name, muscle, cat) {
+    const id = "cx_" + Math.random().toString(36).slice(2,9);
+    setCustomExercises(ce => ({...ce, [id]: { name: name.trim(), muscle, cat, custom: true }}));
+    return id;
+  }
   const [wkInit, setWkInit] = useState(null);
   const [completedWk, setCompletedWk] = useState(null);
   const [editingWk, setEditingWk] = useState(null); // { workout, index }
@@ -1621,7 +1720,7 @@ export default function App() {
     const exercisesInput = Array.isArray(input.exercises) ? input.exercises : [];
 
     const exercises = exercisesInput.map(ex => {
-      if (!EXERCISES[ex.ex_id]) throw new Error(`Unknown exercise id: ${ex.ex_id}`);
+      if (!EXERCISES[ex.ex_id] && !customExercises[ex.ex_id]) throw new Error(`Unknown exercise id: ${ex.ex_id}. Valid built-in ids and any custom ones you've created. Use ones from the catalog.`);
       const setCount = Math.max(1, Math.min(20, parseInt(ex.sets) || 1));
       const reps = parseInt(ex.reps) || 0;
       const weight = ex.weight != null ? Number(ex.weight) : 0;
@@ -1701,8 +1800,8 @@ export default function App() {
     setEditingWk(null); setScreen("home");
   }
 
-  if(screen==="workout"&&wkInit) return <WorkoutScreen mode="live" initExercises={wkInit.exercises} workoutName={wkInit.name} onFinish={finishWorkout} onCancel={()=>setScreen("home")}/>;
-  if(screen==="backfill"&&wkInit) return <WorkoutScreen mode="backfill" initExercises={wkInit.exercises} workoutName={wkInit.name} initialDate={wkInit.date} onFinish={saveBackfill} onCancel={()=>setScreen("home")}/>;
+  if(screen==="workout"&&wkInit) return <WorkoutScreen mode="live" initExercises={wkInit.exercises} workoutName={wkInit.name} customExercises={customExercises} onAddCustom={addCustomExercise} onFinish={finishWorkout} onCancel={()=>setScreen("home")}/>;
+  if(screen==="backfill"&&wkInit) return <WorkoutScreen mode="backfill" initExercises={wkInit.exercises} workoutName={wkInit.name} initialDate={wkInit.date} customExercises={customExercises} onAddCustom={addCustomExercise} onFinish={saveBackfill} onCancel={()=>setScreen("home")}/>;
   if(screen==="edit"&&editingWk) return <WorkoutScreen
     mode="edit"
     initExercises={[]}
@@ -1710,6 +1809,8 @@ export default function App() {
     initialDate={editingWk.workout.date.slice(0,10)}
     initialElapsedSec={editingWk.workout.elapsed}
     workoutName={editingWk.workout.name}
+    customExercises={customExercises}
+    onAddCustom={addCustomExercise}
     onFinish={saveEdit}
     onCancel={()=>{setEditingWk(null);setScreen("home");}}
     onDelete={deleteWorkout}
@@ -1735,7 +1836,7 @@ export default function App() {
             const maxW=item.sets.reduce((a,s)=>Math.max(a,parseFloat(s.weight)||0),0);
             return(
               <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",marginBottom:8}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:C.text,fontFamily:MONO}}>{EXERCISES[item.exId]||item.exId}</span><span style={{fontSize:12,color:C.accent,fontFamily:MONO}}>{exVol>0?`${exVol.toLocaleString()} lbs`:""}</span></div>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:C.text,fontFamily:MONO}}>{EXERCISES[item.exId]||customExercises[item.exId]?.name||item.exId}</span><span style={{fontSize:12,color:C.accent,fontFamily:MONO}}>{exVol>0?`${exVol.toLocaleString()} lbs`:""}</span></div>
                 <div style={{fontSize:11,color:C.muted,fontFamily:MONO}}>{item.sets.filter(s=>s.done).length} sets · max {maxW} lbs</div>
               </div>
             );
