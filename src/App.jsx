@@ -29,7 +29,18 @@ const MONO = "'DM Mono','Courier New',monospace";
 const DIET_CONFIG   = { green: { emoji:"🟢", label:"Clean",    color: C.green,  desc:"On plan"        }, yellow: { emoji:"🟡", label:"Decent",   color: C.yellow, desc:"Minor slips"    }, red:    { emoji:"🔴", label:"Off",      color: C.red,    desc:"Off plan"       } };
 const ACTIVE_CONFIG = { green: { emoji:"🟢", label:"Active",   color: C.green,  desc:"Crushed it"     }, yellow: { emoji:"🟡", label:"Moving",   color: C.yellow, desc:"Light movement" }, red:    { emoji:"🔴", label:"Rest",     color: C.red,    desc:"Rest day"       } };
 
-const WEEKLY_GOALS = { perfectDays: 3, workouts: 4, dietGreen: 4, dietRed: 1, activeGreen: 4 };
+const DEFAULT_GOALS = { perfectDays: 3, workouts: 4, dietGreen: 4, dietRed: 1, activeGreen: 4 };
+// Back-compat alias — components that haven't been threaded with the user's
+// edited goals (legacy bits, IronTab) read from this. The dashboard uses the
+// editable user-set goals via the goals prop.
+const WEEKLY_GOALS = DEFAULT_GOALS;
+const GOAL_META = [
+  { key: "perfectDays", emoji: "⭐", label: "Perfect days",    type: "min", hint: "Diet green + active + workout, same day" },
+  { key: "workouts",    emoji: "🏋", label: "Workouts",       type: "min", hint: "Strength or session-logged training" },
+  { key: "dietGreen",   emoji: "🟢", label: "Clean diet days", type: "min", hint: "Days you logged as green diet" },
+  { key: "activeGreen", emoji: "🟢", label: "Active days",     type: "min", hint: "Days you logged as green activity" },
+  { key: "dietRed",     emoji: "🔴", label: "Red diet days",   type: "max", hint: "At most this many off-plan days" },
+];
 
 const EXERCISES = {
   // Push
@@ -114,6 +125,21 @@ const DEFAULT_BOARDS = [
 // ─── Utils ────────────────────────────────────────────────────────────────────
 function uid() { return Math.random().toString(36).slice(2,9); }
 function isoDate(d=new Date()) { return d.toISOString().slice(0,10); }
+function e1RM(w, r) { if (!w || !r) return 0; return Math.round(w * (1 + r/30)); }
+function bestRMByExercise(history, excludeId=null) {
+  const result = {};
+  for (const w of history) {
+    if (excludeId && w.id === excludeId) continue;
+    for (const ex of w.exercises) {
+      for (const s of ex.sets) {
+        if (!s.done) continue;
+        const rm = e1RM(parseFloat(s.weight), parseInt(s.reps));
+        if (rm > (result[ex.exId] || 0)) result[ex.exId] = rm;
+      }
+    }
+  }
+  return result;
+}
 function formatTime(s) { const m=Math.floor(s/60).toString().padStart(2,"0"); return `${m}:${(s%60).toString().padStart(2,"0")}`; }
 function getWeekDays(offset=0) {
   const now=new Date(); const day=now.getDay();
@@ -253,7 +279,8 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail }) {
+function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, goals = DEFAULT_GOALS, onEditGoals }) {
+  const G = goals;
   const today = isoDate();
   const [viewMode, setViewMode] = useState("week"); // "week" | "month"
   const [monthOffset, setMonthOffset] = useState(0);
@@ -370,11 +397,11 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:34,fontWeight:700,color:C.accent,fontFamily:MONO,lineHeight:1}}>{wkPerfect}</div>
-            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2,letterSpacing:"0.1em"}}>THIS WEEK / GOAL {WEEKLY_GOALS.perfectDays}</div>
+            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2,letterSpacing:"0.1em"}}>THIS WEEK / GOAL {G.perfectDays}</div>
           </div>
         </div>
         <div style={{height:4,background:C.border,borderRadius:2,marginTop:10}}>
-          <div style={{height:4,borderRadius:2,width:`${Math.min(wkPerfect/Math.max(WEEKLY_GOALS.perfectDays,1),1)*100}%`,background:C.accent,transition:"width 0.5s"}}/>
+          <div style={{height:4,borderRadius:2,width:`${Math.min(wkPerfect/Math.max(G.perfectDays,1),1)*100}%`,background:C.accent,transition:"width 0.5s"}}/>
         </div>
       </div>
 
@@ -418,12 +445,15 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
 
           {/* Weekly goals */}
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:14}}>
-            <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:14}}>WEEKLY GOALS</div>
-            <GoalBar label="⭐ Perfect days"  got={wkPerfect}   target={WEEKLY_GOALS.perfectDays} color={C.accent}/>
-            <GoalBar label="Workouts"         got={wkWorkouts}  target={WEEKLY_GOALS.workouts}    color={C.accent}/>
-            <GoalBar label="Clean diet days"  got={wkDietGreen} target={WEEKLY_GOALS.dietGreen}   color={C.green}/>
-            <GoalBar label="Active days"      got={wkActive}    target={WEEKLY_GOALS.activeGreen} color={C.green}/>
-            <GoalBar label="Red diet days"    got={wkDietRed}   target={WEEKLY_GOALS.dietRed}     color={C.red} invert/>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em"}}>WEEKLY GOALS</div>
+              {onEditGoals && <button onClick={onEditGoals} style={{background:"transparent",border:"none",color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em",textDecoration:"underline"}}>Edit</button>}
+            </div>
+            <GoalBar label="⭐ Perfect days"  got={wkPerfect}   target={G.perfectDays} color={C.accent}/>
+            <GoalBar label="Workouts"         got={wkWorkouts}  target={G.workouts}    color={C.accent}/>
+            <GoalBar label="Clean diet days"  got={wkDietGreen} target={G.dietGreen}   color={C.green}/>
+            <GoalBar label="Active days"      got={wkActive}    target={G.activeGreen} color={C.green}/>
+            <GoalBar label="Red diet days"    got={wkDietRed}   target={G.dietRed}     color={C.red} invert/>
           </div>
         </>
       ) : (
@@ -489,10 +519,10 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
       {/* 8-WEEK TRENDS — always visible */}
       <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>8-WEEK TRENDS</div>
       {[
-        {label:"⭐ PERFECT DAYS / WEEK", data:weeks.map(w=>w.perfect),  max:7,     color:C.accent, goalLine: WEEKLY_GOALS.perfectDays},
-        {label:"WORKOUTS / WEEK",        data:weeks.map(w=>w.workouts), max:maxWk, color:C.accent, goalLine: WEEKLY_GOALS.workouts},
-        {label:"CLEAN DIET DAYS",        data:weeks.map(w=>w.dg),       max:7,     color:C.green,  goalLine: WEEKLY_GOALS.dietGreen},
-        {label:"ACTIVE DAYS",            data:weeks.map(w=>w.ag),       max:7,     color:C.green,  goalLine: WEEKLY_GOALS.activeGreen},
+        {label:"⭐ PERFECT DAYS / WEEK", data:weeks.map(w=>w.perfect),  max:7,     color:C.accent, goalLine: G.perfectDays},
+        {label:"WORKOUTS / WEEK",        data:weeks.map(w=>w.workouts), max:maxWk, color:C.accent, goalLine: G.workouts},
+        {label:"CLEAN DIET DAYS",        data:weeks.map(w=>w.dg),       max:7,     color:C.green,  goalLine: G.dietGreen},
+        {label:"ACTIVE DAYS",            data:weeks.map(w=>w.ag),       max:7,     color:C.green,  goalLine: G.activeGreen},
       ].map(({label,data,max,color,goalLine})=>(
         <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
           <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>{label}</div>
@@ -521,11 +551,11 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
 
       {/* Red diet days trend */}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:14}}>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>RED DIET DAYS / WEEK · max {WEEKLY_GOALS.dietRed}</div>
+        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>RED DIET DAYS / WEEK · max {G.dietRed}</div>
         <div style={{display:"flex",alignItems:"flex-end",gap:4,height:40}}>
           {weeks.map((w,i)=>{
             const h=Math.max((w.dr/3)*36,w.dr>0?4:2);
-            return <div key={i} style={{flex:1,height:h,background:w.dr===0?C.green:w.dr<=WEEKLY_GOALS.dietRed?C.border2:C.red,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}}/>;
+            return <div key={i} style={{flex:1,height:h,background:w.dr===0?C.green:w.dr<=G.dietRed?C.border2:C.red,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}}/>;
           })}
         </div>
       </div>
@@ -1176,10 +1206,18 @@ function WorkoutScreen({
   initialElapsedSec = 0,
   customExercises = {},
   onAddCustom = null,
+  history = [],
+  excludeWorkoutId = null,
 }) {
   // Merged catalogs that include user-created exercises
   const mergedNames = {...EXERCISES, ...Object.fromEntries(Object.entries(customExercises).map(([id,c])=>[id,c.name]))};
   const mergedMeta  = {...EX_META,    ...Object.fromEntries(Object.entries(customExercises).map(([id,c])=>[id,{muscle:c.muscle, cat:c.cat}]))};
+
+  // PR detection — compute previous bests once on mount
+  const prevBestsRef = useRef(null);
+  const prTriggeredRef = useRef(new Set());
+  const [activePR, setActivePR] = useState(null);
+  if (prevBestsRef.current === null) prevBestsRef.current = bestRMByExercise(history, excludeWorkoutId);
   const [exercises, setExercises] = useState(() =>
     initialBlocks || initExercises.map(id=>({id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}))
   );
@@ -1272,7 +1310,27 @@ function WorkoutScreen({
                   <span style={{color:C.dim,fontSize:12}}>×</span>
                   <input style={{flex:1,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:14,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" placeholder="reps" value={s.reps} onChange={e=>{const sets=[...item.sets];sets[si]={...s,reps:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
                   {e1RM(parseFloat(s.weight),parseInt(s.reps))>0&&<span style={{fontSize:10,color:C.muted,fontFamily:MONO,width:40,textAlign:"center"}}>{e1RM(parseFloat(s.weight),parseInt(s.reps))}</span>}
-                  <button style={{width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:700,background:s.done?C.accent:"transparent",color:s.done?"#000":C.dim,border:s.done?"none":`1px solid ${C.border2}`,transition:"all 0.15s",flexShrink:0,fontFamily:MONO}} onClick={()=>{const sets=[...item.sets];sets[si]={...s,done:!s.done};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}>{s.done?"✓":"○"}</button>
+                  <button style={{width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:700,background:s.done?C.accent:"transparent",color:s.done?"#000":C.dim,border:s.done?"none":`1px solid ${C.border2}`,transition:"all 0.15s",flexShrink:0,fontFamily:MONO}} onClick={()=>{
+                    const newDone = !s.done;
+                    // PR detection: only on transition to done, for non-cardio, in non-edit mode
+                    if (newDone && mode !== "edit" && mergedMeta[item.exId]?.cat !== "Cardio" && !prTriggeredRef.current.has(s.id)) {
+                      const rm = e1RM(parseFloat(s.weight), parseInt(s.reps));
+                      if (rm > 0) {
+                        const prev = prevBestsRef.current[item.exId] || 0;
+                        if (rm > prev) {
+                          prTriggeredRef.current.add(s.id);
+                          prevBestsRef.current[item.exId] = rm;
+                          setActivePR({
+                            exId: item.exId,
+                            exName: mergedNames[item.exId] || item.exId,
+                            rm, prev,
+                            weight: s.weight, reps: s.reps,
+                          });
+                        }
+                      }
+                    }
+                    const sets=[...item.sets];sets[si]={...s,done:newDone};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
+                  }}>{s.done?"✓":"○"}</button>
                   <button style={{width:20,background:"transparent",border:"none",color:C.border2,fontSize:10,cursor:"pointer"}} onClick={()=>{const sets=item.sets.filter((_,j)=>j!==si);setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}>✕</button>
                 </div>
               ))}
@@ -1342,6 +1400,53 @@ function WorkoutScreen({
           </div>
         </div>
       )}
+      {activePR && <PRCelebration pr={activePR} onClose={()=>setActivePR(null)}/>}
+    </div>
+  );
+}
+
+// ─── PR Celebration ───────────────────────────────────────────────────────────
+function PRCelebration({ pr, onClose }) {
+  useEffect(()=>{ const t = setTimeout(onClose, 6000); return ()=>clearTimeout(t); }, [onClose]);
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",animation:"prFadeIn 0.25s ease-out"}}>
+      {/* Sparkle burst */}
+      <div style={{position:"absolute",inset:0,pointerEvents:"none",overflow:"hidden"}}>
+        {Array.from({length:28}).map((_,i)=>{
+          const angle = (i/28) * Math.PI * 2;
+          const r = 200 + (i%3)*40;
+          return (
+            <div key={i} style={{
+              position:"absolute", left:"50%", top:"50%",
+              width:8, height:8, borderRadius:"50%",
+              background: i%3===0?C.accent:i%3===1?C.purple:C.yellow,
+              boxShadow:"0 0 10px currentColor",
+              "--tx": `${Math.cos(angle)*r}px`,
+              "--ty": `${Math.sin(angle)*r}px`,
+              animation:`prSparkle 1.4s cubic-bezier(0.2, 0.6, 0.3, 1) ${i*0.015}s both`,
+            }}/>
+          );
+        })}
+      </div>
+      {/* Trophy + numbers */}
+      <div onClick={e=>e.stopPropagation()} style={{
+        position:"relative", textAlign:"center", padding:"36px 32px",
+        background:`linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
+        border:`1px solid ${C.accent}`, borderRadius:20, maxWidth:360, width:"calc(100% - 32px)",
+        boxShadow:`0 0 60px rgba(200,241,53,0.25), 0 0 120px rgba(200,241,53,0.1)`,
+        animation:"prPop 0.5s cubic-bezier(0.18, 1.25, 0.5, 1)",
+      }}>
+        <div style={{fontSize:64,marginBottom:12,animation:"prTrophyBounce 0.8s ease-out"}}>🏆</div>
+        <div style={{fontSize:10,letterSpacing:"0.3em",color:C.accent,fontFamily:MONO,fontWeight:700,marginBottom:8}}>NEW PERSONAL RECORD</div>
+        <div style={{fontSize:18,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:24}}>{pr.exName}</div>
+        <div style={{fontSize:64,fontWeight:900,color:C.accent,fontFamily:MONO,lineHeight:1,textShadow:"0 0 32px rgba(200,241,53,0.6)",marginBottom:6}}>{pr.rm}</div>
+        <div style={{fontSize:9,letterSpacing:"0.25em",color:C.muted,fontFamily:MONO,marginBottom:18}}>EST 1RM · LBS</div>
+        <div style={{fontSize:12,color:C.muted,fontFamily:MONO,marginBottom:24}}>
+          {pr.weight} lbs × {pr.reps} reps
+          {pr.prev > 0 ? <span style={{color:C.dim}}> · up from {pr.prev}</span> : <span style={{color:C.dim}}> · first PR</span>}
+        </div>
+        <button onClick={onClose} style={{background:C.accent,border:"none",borderRadius:10,color:"#000",padding:"14px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}>Keep Going →</button>
+      </div>
     </div>
   );
 }
@@ -1778,6 +1883,53 @@ function SignInScreen({ onSignIn }) {
   );
 }
 
+function GoalsEditor({ goals, onSave, onClose, onReset }) {
+  const [draft, setDraft] = useState({ ...goals });
+  function set(key, val) {
+    const n = parseInt(val);
+    setDraft(d => ({ ...d, [key]: isNaN(n) ? 0 : Math.max(0, Math.min(7, n)) }));
+  }
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:150,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div style={{background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,maxHeight:"88vh",display:"flex",flexDirection:"column",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",borderBottom:`1px solid ${C.border}`}}>
+          <div>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Edit Weekly Goals</div>
+            <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginTop:2}}>How often you want to hit each per week</div>
+          </div>
+          <button style={{background:"transparent",border:"none",color:C.muted,fontSize:16,cursor:"pointer"}} onClick={onClose}>✕</button>
+        </div>
+        <div style={{padding:"8px 16px"}}>
+          {GOAL_META.map(m => (
+            <div key={m.key} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:22,width:28,textAlign:"center"}}>{m.emoji}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:C.text,fontFamily:MONO}}>{m.label}</div>
+                <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>
+                  {m.type === "max" ? "at most" : "at least"} this many per week
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <button style={{width:30,height:30,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>set(m.key, (draft[m.key]||0) - 1)}>−</button>
+                <input type="number" min="0" max="7" value={draft[m.key] ?? 0} onChange={e=>set(m.key, e.target.value)}
+                  style={{width:44,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"6px 0",fontSize:14,fontFamily:MONO,textAlign:"center",outline:"none"}}/>
+                <button style={{width:30,height:30,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>set(m.key, (draft[m.key]||0) + 1)}>+</button>
+                <span style={{fontSize:10,color:C.dim,fontFamily:MONO,width:24,textAlign:"right"}}>/wk</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8,padding:"12px 16px",borderTop:`1px solid ${C.border}`}}>
+          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onReset}>Reset</button>
+          <div style={{flex:1}}/>
+          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onClose}>Cancel</button>
+          <button style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"10px 18px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={()=>onSave(draft)}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   // === Hooks (all called unconditionally — React rules) ===
   const auth = useAuth();
@@ -1796,7 +1948,14 @@ export default function App() {
   const [completedWk, setCompletedWk] = useState(null);
   const [editingWk, setEditingWk] = useState(null);
   const [showRooney, setShowRooney] = useState(false);
+  const [showGoalsEditor, setShowGoalsEditor] = useState(false);
   const [migrationSummary, setMigrationSummary] = useState(null);
+
+  // Editable weekly goals — localStorage-backed for now (low complexity,
+  // doesn't really need cross-device sync since you'd set the same anyway).
+  const [goals, setGoalsRaw] = usePersistedState("iron_goals", DEFAULT_GOALS);
+  const mergedGoals = { ...DEFAULT_GOALS, ...goals };
+  function setGoals(next) { setGoalsRaw({ ...mergedGoals, ...next }); }
 
   // Migrate any pre-existing localStorage data into Supabase on first sign-in
   useEffect(() => {
@@ -1937,8 +2096,8 @@ export default function App() {
     setEditingWk(null); setScreen("home");
   }
 
-  if(screen==="workout"&&wkInit) return <WorkoutScreen mode="live" initExercises={wkInit.exercises} workoutName={wkInit.name} customExercises={customExercises} onAddCustom={addCustomExercise} onFinish={finishWorkout} onCancel={()=>setScreen("home")}/>;
-  if(screen==="backfill"&&wkInit) return <WorkoutScreen mode="backfill" initExercises={wkInit.exercises} workoutName={wkInit.name} initialDate={wkInit.date} customExercises={customExercises} onAddCustom={addCustomExercise} onFinish={saveBackfill} onCancel={()=>setScreen("home")}/>;
+  if(screen==="workout"&&wkInit) return <WorkoutScreen mode="live" initExercises={wkInit.exercises} workoutName={wkInit.name} customExercises={customExercises} onAddCustom={addCustomExercise} history={history} onFinish={finishWorkout} onCancel={()=>setScreen("home")}/>;
+  if(screen==="backfill"&&wkInit) return <WorkoutScreen mode="backfill" initExercises={wkInit.exercises} workoutName={wkInit.name} initialDate={wkInit.date} customExercises={customExercises} onAddCustom={addCustomExercise} history={history} onFinish={saveBackfill} onCancel={()=>setScreen("home")}/>;
   if(screen==="edit"&&editingWk) return <WorkoutScreen
     mode="edit"
     initExercises={[]}
@@ -1948,6 +2107,8 @@ export default function App() {
     workoutName={editingWk.workout.name}
     customExercises={customExercises}
     onAddCustom={addCustomExercise}
+    history={history}
+    excludeWorkoutId={editingWk.workout.id}
     onFinish={saveEdit}
     onCancel={()=>{setEditingWk(null);setScreen("home");}}
     onDelete={deleteWorkout}
@@ -2010,7 +2171,7 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} goals={mergedGoals} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout}/>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} boards={boards} setBoards={setBoards}/>}
         {tab==="log"   && <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>}
@@ -2034,6 +2195,15 @@ export default function App() {
         />
       )}
 
+      {showGoalsEditor && (
+        <GoalsEditor
+          goals={mergedGoals}
+          onSave={(g) => { setGoals(g); setShowGoalsEditor(false); }}
+          onClose={() => setShowGoalsEditor(false)}
+          onReset={() => { setGoals(DEFAULT_GOALS); setShowGoalsEditor(false); }}
+        />
+      )}
+
       {/* Bottom nav */}
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20}}>
         {TABS.map(t=>(
@@ -2052,6 +2222,10 @@ const _s=document.createElement("style");
 _s.textContent=`
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+@keyframes prFadeIn{from{opacity:0}to{opacity:1}}
+@keyframes prPop{0%{transform:scale(0.5);opacity:0}60%{transform:scale(1.05);opacity:1}100%{transform:scale(1);opacity:1}}
+@keyframes prTrophyBounce{0%{transform:scale(0) rotate(-15deg)}50%{transform:scale(1.3) rotate(8deg)}100%{transform:scale(1) rotate(0)}}
+@keyframes prSparkle{0%{transform:translate(0,0) scale(0);opacity:0}15%{transform:translate(calc(var(--tx)*0.15), calc(var(--ty)*0.15)) scale(1.2);opacity:1}100%{transform:translate(var(--tx), var(--ty)) scale(0.3);opacity:0}}
 @keyframes steamRise{
   0%   { transform: translateY(0) scaleY(1);   opacity: 0; }
   20%  { opacity: 0.8; }
