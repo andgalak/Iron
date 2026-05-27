@@ -254,6 +254,44 @@ export function useCustomExercises(userId) {
   return { data, loading, add };
 }
 
+// ─── ROONEY MEMORIES ──────────────────────────────────────────────────────────
+export function useRooneyMemories(userId) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase.from("rooney_memories").select("*").eq("user_id", userId).order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) console.error("memories load:", error);
+        setData(data || []);
+        setLoading(false);
+      });
+  }, [userId]);
+
+  async function add(category, text) {
+    const row = { user_id: userId, category, text };
+    const { data: inserted, error } = await supabase.from("rooney_memories").insert(row).select().single();
+    if (error) { console.error("add memory:", error); return null; }
+    setData(d => [inserted, ...d]);
+    return inserted;
+  }
+
+  async function remove(id) {
+    setData(d => d.filter(m => m.id !== id));
+    const { error } = await supabase.from("rooney_memories").delete().eq("id", id);
+    if (error) console.error("delete memory:", error);
+  }
+
+  async function reload() {
+    if (!userId) return;
+    const { data: fresh } = await supabase.from("rooney_memories").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    setData(fresh || []);
+  }
+
+  return { data, loading, add, remove, reload };
+}
+
 // ─── ONE-TIME MIGRATION: localStorage → Supabase ──────────────────────────────
 const MIG_FLAG = "iron_migrated_to_supabase_v1";
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase, supabaseConfigured } from "./lib/supabase";
 import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
-  useFocusSessions, useBoards, useCustomExercises, migrateLocalStorage,
+  useFocusSessions, useBoards, useCustomExercises, useRooneyMemories, migrateLocalStorage,
 } from "./lib/supabaseHooks";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -1508,6 +1508,29 @@ const ROONEY_TOOLS = [
     }
   },
   {
+    name: "remember",
+    description: "Save a fact about Andrew so future conversations remember it. Use this when he shares something noteworthy and durable — an injury, a preference, a deadline, a long-term goal, a person in his life. DO NOT use for trivial in-the-moment chat. Categories: physical (injuries, limitations, allergies), preference (training style, likes/dislikes), goal (long-term aim), context (current life situation, upcoming events), relationship (people he mentions repeatedly), other.",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: { type: "string", enum: ["physical","preference","goal","context","relationship","other"] },
+        text: { type: "string", description: "The fact, written in third person as a brief sentence. Example: 'Andrew has chronic left knee pain from old skiing injury — avoid deep squats and box jumps.'" },
+      },
+      required: ["category", "text"]
+    }
+  },
+  {
+    name: "forget",
+    description: "Remove a previously-stored memory. Use only when Andrew explicitly asks you to forget something, or when a fact is clearly stale/wrong. Pass the memory id from the ROONEY MEMORY section of the system prompt.",
+    input_schema: {
+      type: "object",
+      properties: {
+        memory_id: { type: "string", description: "The id of the memory to remove." },
+      },
+      required: ["memory_id"]
+    }
+  },
+  {
     name: "add_kanban_card",
     description: "Add a card to a kanban board column. Use when Andrew says 'remind me to', 'add to my todo', 'put on my Job Search board', etc. Match boards/columns case-insensitively. If column not specified, use the first column (usually Backlog or Todo).",
     input_schema: {
@@ -1522,7 +1545,75 @@ const ROONEY_TOOLS = [
   },
 ];
 
-function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards }) {
+function computeObservations({ history, dietLog, activeLog, focusSessions, goals }) {
+  const G = { ...DEFAULT_GOALS, ...(goals || {}) };
+  const obs = [];
+  const today = isoDate();
+  const thisWeekDays = getWeekDays(0);
+  const lastWeekDays = getWeekDays(-1);
+
+  // Workouts this week vs last
+  const wkW = history.filter(w => thisWeekDays.includes(isoDate(new Date(w.date)))).length;
+  const lastW = history.filter(w => lastWeekDays.includes(isoDate(new Date(w.date)))).length;
+  if (wkW >= G.workouts) obs.push(`Hit workout goal: ${wkW}/${G.workouts} this week.`);
+  else if (wkW < lastW && lastW > 0) obs.push(`Workouts trending down: ${wkW} this week vs ${lastW} last week.`);
+
+  // Perfect days streak
+  const wkSet = new Set(history.map(w => isoDate(new Date(w.date))));
+  const perfect = thisWeekDays.filter(d => dietLog[d]==="green" && activeLog[d]==="green" && wkSet.has(d)).length;
+  if (perfect >= G.perfectDays) obs.push(`Hit perfect days goal: ${perfect}/${G.perfectDays}.`);
+  else if (perfect > 0) obs.push(`Perfect days so far: ${perfect}/${G.perfectDays}.`);
+
+  // Red diet days
+  const redDays = thisWeekDays.filter(d => dietLog[d]==="red").length;
+  if (redDays > G.dietRed) obs.push(`Red diet days over cap: ${redDays} (max ${G.dietRed}).`);
+
+  // PR check on latest workout
+  const latest = history[0];
+  if (latest) {
+    const priors = bestRMByExercise(history.slice(1), latest.id);
+    for (const ex of latest.exercises) {
+      const meta = EX_META[ex.exId];
+      if (meta?.cat === "Cardio") continue;
+      let best = 0;
+      for (const s of ex.sets) {
+        if (!s.done) continue;
+        const rm = e1RM(parseFloat(s.weight), parseInt(s.reps));
+        if (rm > best) best = rm;
+      }
+      const prev = priors[ex.exId] || 0;
+      if (best > 0 && best > prev) {
+        const name = EXERCISES[ex.exId] || ex.exId;
+        obs.push(`New PR on ${isoDate(new Date(latest.date))}: ${name} ${best} e1RM (prev ${prev || "none"}).`);
+        break; // one PR mention per latest workout
+      }
+    }
+  }
+
+  // Skipped muscle group: any exercise category not seen in last 14 days
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 14);
+  const recentCats = new Set();
+  for (const w of history) {
+    if (new Date(w.date) < cutoff) break;
+    for (const ex of w.exercises) {
+      const cat = EX_META[ex.exId]?.cat;
+      if (cat) recentCats.add(cat);
+    }
+  }
+  for (const cat of ["Legs","Pull","Push"]) {
+    if (!recentCats.has(cat) && history.length > 0) obs.push(`No ${cat} day in the last 14 days.`);
+  }
+
+  // Focus minutes change
+  const wkF = focusSessions.filter(s => thisWeekDays.includes(s.date)).reduce((a,s)=>a+s.mins,0);
+  const lastF = focusSessions.filter(s => lastWeekDays.includes(s.date)).reduce((a,s)=>a+s.mins,0);
+  if (wkF >= 240) obs.push(`Strong focus week: ${Math.round(wkF/60*10)/10}h logged.`);
+  else if (lastF >= 120 && wkF < lastF/2) obs.push(`Focus time down: ${Math.round(wkF/60*10)/10}h this week vs ${Math.round(lastF/60*10)/10}h last.`);
+
+  return obs;
+}
+
+function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals }) {
   const today = isoDate();
   const thisWeekDays = getWeekDays(0);
 
@@ -1585,6 +1676,17 @@ WORK BOARDS: ${boardSummary || "no boards"}
 
 RECENT FOCUS SESSIONS: ${focusSessions.slice(0,3).map(s=>`${s.label} (${s.mins}m on ${s.date})`).join(", ") || "none yet"}
 
+${(memories && memories.length > 0) ? `ROONEY'S MEMORY OF ANDREW (across all past conversations — reference these when relevant):
+${memories.map(m => `- [${m.category} · id=${m.id}] ${m.text}`).join("\n")}
+` : `ROONEY'S MEMORY OF ANDREW: empty so far. As Andrew shares enduring facts (injuries, preferences, goals, life context, people he mentions), use the remember() tool to save them.`}
+
+${(() => {
+  const obs = computeObservations({ history, dietLog, activeLog, focusSessions, goals });
+  if (obs.length === 0) return "OBSERVATIONS THIS WEEK: nothing notable to flag.";
+  return `OBSERVATIONS THIS WEEK (use these proactively when relevant — Andrew may not have noticed):
+${obs.map(o => "- " + o).join("\n")}`;
+})()}
+
 YOUR ROLE:
 - Be honest and direct but warm and supportive — never sycophantic
 - Reference Andrew's actual data when relevant, don't make things up
@@ -1595,19 +1697,22 @@ YOUR ROLE:
 - Sign off occasionally as Rooney but don't overdo it
 
 TOOLS YOU CAN USE:
-You have tools to mutate Andrew's data: log_workout, log_diet, log_activity, add_kanban_card.
+You have tools to mutate Andrew's data and your own memory: log_workout, log_diet, log_activity, add_kanban_card, remember, forget.
 - Today's date is ${today}. When Andrew says "yesterday", "last Monday", etc., resolve to ISO YYYY-MM-DD relative to ${today}.
 - For log_workout: if Andrew gives you enough detail (exercises, sets/reps/weight), call the tool. If he's vague ("I worked out yesterday"), ASK for what he did and approximate duration before calling. Don't invent specifics.
 - For log_diet / log_activity: call directly when he describes his day.
 - For add_kanban_card: existing boards are listed above under WORK BOARDS. Match by partial name (case-insensitive). If the board doesn't exist, ask before creating.
+- For remember: use sparingly but proactively. When Andrew shares a durable fact about himself — an injury ("my left knee acts up"), a preference ("I hate cardio mornings"), a life context ("I have a Tulip interview Thursday"), a person (his coach "Mike at the gym"), or a long-term goal ("I want to deadlift 4 plates by July") — call remember() so future conversations have it. Don't ask permission, just do it and briefly note "noted." Don't remember trivial throwaway comments.
+- For forget: only call when Andrew explicitly says to drop a memory, OR when a memory in ROONEY'S MEMORY OF ANDREW is clearly contradicted by new info. Use the id shown in brackets.
 - After calling a tool, briefly confirm what you did (one sentence). Don't repeat the data — the tool already updated the app.
 - NEVER call a tool to delete or overwrite data without explicit confirmation. log_diet / log_activity overwrite existing values for that date, so confirm if a value is already set.`;
 }
 
-function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, onLogWorkout, onLogDiet, onLogActivity, onAddCard, onClose }) {
+function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, onLogWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
   const [messages, setMessages] = useState([
-    { role:"assistant", content: "Hey Andrew. I'm Rooney. I can see your workouts, diet, focus, and boards. I can also log past workouts, diet days, activity, or todo cards for you — just ask. What's on your mind?" }
+    { role:"assistant", content: "Hey Andrew. I'm Rooney. I can see your workouts, diet, focus, and boards, and I remember things you tell me across conversations. I can also log past workouts, diet days, activity, or todo cards. What's on your mind?" }
   ]);
+  const [showMemPanel, setShowMemPanel] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
@@ -1634,6 +1739,14 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, onLogW
         const r = onAddCard(input);
         return { ok: r.ok, summary: r.summary };
       }
+      if (name === "remember") {
+        const r = onRemember(input.category, input.text);
+        return { ok: true, summary: r.summary };
+      }
+      if (name === "forget") {
+        const r = onForget(input.memory_id);
+        return { ok: true, summary: r.summary };
+      }
       return { ok: false, summary: `Unknown tool: ${name}` };
     } catch (e) {
       return { ok: false, summary: `Tool failed: ${e.message || String(e)}` };
@@ -1650,7 +1763,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, onLogW
     setMessages(nextMsgs);
     setLoading(true);
 
-    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards });
+    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals });
 
     // Convert displayed messages into API messages (drop UI-only fields)
     let apiMessages = nextMsgs.map(m => {
@@ -1738,10 +1851,44 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, onLogW
           <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#C8F135,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#000",fontFamily:"monospace",flexShrink:0}}>R</div>
           <div style={{flex:1}}>
             <div style={{fontSize:14,fontWeight:700,color:"#e8e8e8",fontFamily:"monospace"}}>Rooney</div>
-            <div style={{fontSize:10,color:"#444",fontFamily:"monospace"}}>Your personal coach</div>
+            <div style={{fontSize:10,color:"#444",fontFamily:"monospace"}}>Your personal coach · {memories.length} memor{memories.length===1?"y":"ies"}</div>
           </div>
+          <button title="What Rooney remembers about you" style={{background:"transparent",border:"none",color:memories.length>0?"#C8F135":"#444",fontSize:18,cursor:"pointer",lineHeight:1,marginRight:4}} onClick={()=>setShowMemPanel(true)}>🧠</button>
           <button style={{background:"transparent",border:"none",color:"#444",fontSize:20,cursor:"pointer",lineHeight:1}} onClick={onClose}>✕</button>
         </div>
+
+        {showMemPanel && (
+          <div onClick={()=>setShowMemPanel(false)} style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.85)",zIndex:5,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:60}}>
+            <div onClick={e=>e.stopPropagation()} style={{width:"calc(100% - 24px)",maxWidth:440,maxHeight:"calc(82vh - 80px)",background:"#0d0d0d",border:"1px solid #2a2a2a",borderRadius:14,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 16px",borderBottom:"1px solid #1a1a1a"}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:"#e8e8e8",fontFamily:"monospace"}}>🧠 What Rooney remembers</div>
+                  <div style={{fontSize:10,color:"#555",fontFamily:"monospace",marginTop:2}}>Loaded into every conversation. Tap ✕ on any item to delete.</div>
+                </div>
+                <button style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}} onClick={()=>setShowMemPanel(false)}>✕</button>
+              </div>
+              <div style={{overflowY:"auto",padding:"10px 14px 16px"}}>
+                {memories.length === 0 ? (
+                  <div style={{textAlign:"center",color:"#555",fontSize:12,fontFamily:"monospace",padding:"30px 10px",lineHeight:1.6}}>
+                    Nothing yet. As you chat with Rooney and share things about yourself (injuries, preferences, goals, life context), Rooney will start saving them here.
+                  </div>
+                ) : (
+                  Object.entries(memories.reduce((acc,m)=>{(acc[m.category]||=[]).push(m); return acc;}, {})).map(([cat, items]) => (
+                    <div key={cat} style={{marginBottom:14}}>
+                      <div style={{fontSize:9,color:"#555",fontFamily:"monospace",letterSpacing:"0.15em",marginBottom:6,fontWeight:700}}>{cat.toUpperCase()}</div>
+                      {items.map(m => (
+                        <div key={m.id} style={{display:"flex",alignItems:"flex-start",gap:8,background:"#161616",border:"1px solid #1e1e1e",borderRadius:8,padding:"10px 12px",marginBottom:6}}>
+                          <div style={{flex:1,fontSize:12,color:"#cfcfcf",fontFamily:"monospace",lineHeight:1.5}}>{m.text}</div>
+                          <button onClick={()=>onDeleteMemory(m.id)} style={{background:"transparent",border:"none",color:"#444",fontSize:12,cursor:"pointer",padding:2,lineHeight:1}}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Messages */}
         <div style={{flex:1,overflowY:"auto",padding:"16px 16px 8px",display:"flex",flexDirection:"column",gap:10}}>
@@ -1940,6 +2087,7 @@ export default function App() {
   const focusState    = useFocusSessions(userId);
   const boardsState   = useBoards(userId);
   const customExState = useCustomExercises(userId);
+  const memoriesState = useRooneyMemories(userId);
 
   // UI state
   const [tab, setTab] = useState("home");
@@ -2041,6 +2189,17 @@ export default function App() {
     updateActive(date, status);
     return { summary: `Set activity on ${date} to ${status}.` };
   }
+  function rooneyRemember(category, text) {
+    const cat = ["physical","preference","goal","context","relationship","other"].includes(category) ? category : "other";
+    memoriesState.add(cat, text);
+    return { summary: `Noted (${cat}): ${text.slice(0,80)}${text.length>80?"...":""}` };
+  }
+  function rooneyForget(id) {
+    const found = memoriesState.data.find(m => m.id === id);
+    memoriesState.remove(id);
+    return { summary: found ? `Forgot: ${found.text.slice(0,60)}${found.text.length>60?"...":""}` : "Nothing matched that id." };
+  }
+
   function rooneyAddCard(input) {
     const boardQuery = (input.board || "").toLowerCase();
     const targetBoard = boards.find(b => b.name.toLowerCase().includes(boardQuery) || boardQuery.includes(b.name.toLowerCase()));
@@ -2187,10 +2346,15 @@ export default function App() {
         <RooneyChat
           history={history} dietLog={dietLog} activeLog={activeLog}
           focusSessions={focusSessions} boards={boards}
+          memories={memoriesState.data}
+          goals={mergedGoals}
           onLogWorkout={rooneyLogWorkout}
           onLogDiet={rooneyLogDiet}
           onLogActivity={rooneyLogActivity}
           onAddCard={rooneyAddCard}
+          onRemember={rooneyRemember}
+          onForget={rooneyForget}
+          onDeleteMemory={(id)=>memoriesState.remove(id)}
           onClose={()=>setShowRooney(false)}
         />
       )}
