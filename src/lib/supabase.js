@@ -17,7 +17,8 @@ export const supabase = supabaseConfigured
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true, // for magic link callback
+        detectSessionInUrl: true,
+        flowType: "implicit", // tokens in URL hash; no PKCE code_verifier state to lose
       },
     })
   : null;

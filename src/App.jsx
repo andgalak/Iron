@@ -1983,11 +1983,14 @@ function LoadingScreen({ text="Loading..." }) {
   );
 }
 
-function SignInScreen({ onSignIn }) {
+function SignInScreen({ onSignIn, onVerifyCode }) {
   const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
   const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState(null);
+
   async function submit(e) {
     e?.preventDefault();
     if (!email.trim() || sending) return;
@@ -1997,6 +2000,17 @@ function SignInScreen({ onSignIn }) {
     if (error) setErr(error.message || "Couldn't send the link.");
     else setSent(true);
   }
+
+  async function submitCode(e) {
+    e?.preventDefault();
+    if (!code.trim() || verifying) return;
+    setVerifying(true); setErr(null);
+    const { error } = await onVerifyCode(email.trim(), code.trim());
+    setVerifying(false);
+    if (error) setErr(error.message || "Couldn't verify that code.");
+    // On success, useAuth's onAuthStateChange fires and AuthGate flips the screen
+  }
+
   return (
     <CenteredCard>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
@@ -2006,22 +2020,37 @@ function SignInScreen({ onSignIn }) {
       {sent ? (
         <>
           <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:8}}>Check your email</div>
-          <div style={{fontSize:12,color:C.muted,fontFamily:MONO,lineHeight:1.6,marginBottom:14}}>
-            We sent a sign-in link to <span style={{color:C.accent}}>{email}</span>. Click it to come back here. You can close this tab.
+          <div style={{fontSize:12,color:C.muted,fontFamily:MONO,lineHeight:1.6,marginBottom:18}}>
+            We sent a sign-in email to <span style={{color:C.accent}}>{email}</span>. It contains a link AND a 6-digit code.
+            <br/><br/>
+            <span style={{color:C.text}}>Easiest:</span> type the 6-digit code below.
+            <br/>
+            <span style={{color:C.text}}>Or:</span> click the link in the email (must use same browser).
           </div>
-          <button onClick={()=>{setSent(false);setEmail("");}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"8px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Use a different email</button>
+          <form onSubmit={submitCode}>
+            <input
+              type="text" inputMode="numeric" pattern="[0-9]*" maxLength={6} autoComplete="one-time-code"
+              value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,""))} placeholder="123456" autoFocus
+              style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"12px 14px",fontSize:18,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10,letterSpacing:"0.4em",textAlign:"center"}}/>
+            <button type="submit" disabled={code.length<6||verifying}
+              style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:code.length>=6&&!verifying?"pointer":"default",fontFamily:MONO,opacity:code.length>=6&&!verifying?1:0.4,letterSpacing:"0.05em",marginBottom:8}}>
+              {verifying?"Verifying...":"Sign in with code"}
+            </button>
+            {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginBottom:8}}>{err}</div>}
+          </form>
+          <button onClick={()=>{setSent(false);setCode("");setErr(null);}} style={{background:"transparent",border:"none",color:C.muted,padding:"4px 0",fontSize:11,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>Use a different email</button>
         </>
       ) : (
         <form onSubmit={submit}>
           <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:6}}>Sign in</div>
           <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:16}}>
-            We'll email you a one-time link. No password.
+            We'll email you a one-time code (and a link). No password.
           </div>
           <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required
             style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
           <button type="submit" disabled={!email.trim()||sending}
             style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:email.trim()&&!sending?"pointer":"default",fontFamily:MONO,opacity:email.trim()&&!sending?1:0.4,letterSpacing:"0.05em"}}>
-            {sending?"Sending...":"Send magic link"}
+            {sending?"Sending...":"Email me a code"}
           </button>
           {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:10}}>{err}</div>}
         </form>
@@ -2119,7 +2148,7 @@ export default function App() {
   // === Auth gates (early returns) ===
   if (!supabaseConfigured) return <SetupRequiredScreen/>;
   if (auth.loading) return <LoadingScreen text="Loading..."/>;
-  if (!auth.user) return <SignInScreen onSignIn={auth.signInWithMagicLink}/>;
+  if (!auth.user) return <SignInScreen onSignIn={auth.signInWithMagicLink} onVerifyCode={auth.verifyCode}/>;
 
   // === Data from hooks (renamed to match existing code) ===
   const history = workoutsState.data;

@@ -29,9 +29,17 @@ export function useAuth() {
     });
   }, []);
 
+  const verifyCode = useCallback(async (email, token) => {
+    return supabase.auth.verifyOtp({
+      email,
+      token: token.trim(),
+      type: "email",
+    });
+  }, []);
+
   const signOut = useCallback(async () => supabase.auth.signOut(), []);
 
-  return { user, loading, signInWithMagicLink, signOut };
+  return { user, loading, signInWithMagicLink, verifyCode, signOut };
 }
 
 // ─── WORKOUTS ─────────────────────────────────────────────────────────────────
