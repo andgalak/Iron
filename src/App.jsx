@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase, supabaseConfigured } from "./lib/supabase";
+import {
+  useAuth, useWorkouts, useDietLog, useActivityLog,
+  useFocusSessions, useBoards, useCustomExercises, migrateLocalStorage,
+} from "./lib/supabaseHooks";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -248,7 +253,7 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdit, onClearAll }) {
+function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail }) {
   const today = isoDate();
   const [viewMode, setViewMode] = useState("week"); // "week" | "month"
   const [monthOffset, setMonthOffset] = useState(0);
@@ -540,10 +545,21 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
         </>
       )}
 
-      {/* Danger zone */}
+      {/* Account + Danger zone */}
       <div style={{marginTop:24,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
-        <button style={{background:"transparent",border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
-          onClick={onClearAll}>Clear all data</button>
+        {userEmail && (
+          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,marginBottom:10,letterSpacing:"0.05em"}}>
+            Signed in as <span style={{color:C.muted}}>{userEmail}</span>
+          </div>
+        )}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {onSignOut && (
+            <button style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
+              onClick={onSignOut}>Sign out</button>
+          )}
+          <button style={{background:"transparent",border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
+            onClick={onClearAll}>Clear all data</button>
+        </div>
       </div>
 
     </div>
@@ -1681,36 +1697,149 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, onLogW
 }
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
+// ─── AUTH SCREENS ─────────────────────────────────────────────────────────────
+function CenteredCard({ children }) {
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{maxWidth:380,width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SetupRequiredScreen() {
+  return (
+    <CenteredCard>
+      <div style={{fontSize:32,marginBottom:12,textAlign:"center"}}>⚙</div>
+      <div style={{fontSize:18,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:8,letterSpacing:"0.05em"}}>Setup required</div>
+      <div style={{fontSize:13,color:C.muted,fontFamily:MONO,lineHeight:1.6}}>
+        Supabase env vars are missing. Add <span style={{color:C.accent}}>VITE_SUPABASE_URL</span> and <span style={{color:C.accent}}>VITE_SUPABASE_ANON_KEY</span> in your Vercel project settings, then redeploy.
+      </div>
+    </CenteredCard>
+  );
+}
+
+function LoadingScreen({ text="Loading..." }) {
+  return (
+    <CenteredCard>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,marginBottom:14}}>
+        {[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:C.accent,animation:`bounce 1s ${i*0.18}s infinite`}}/>)}
+      </div>
+      <div style={{fontSize:12,color:C.muted,fontFamily:MONO,textAlign:"center",letterSpacing:"0.1em"}}>{text}</div>
+    </CenteredCard>
+  );
+}
+
+function SignInScreen({ onSignIn }) {
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [err, setErr] = useState(null);
+  async function submit(e) {
+    e?.preventDefault();
+    if (!email.trim() || sending) return;
+    setSending(true); setErr(null);
+    const { error } = await onSignIn(email.trim());
+    setSending(false);
+    if (error) setErr(error.message || "Couldn't send the link.");
+    else setSent(true);
+  }
+  return (
+    <CenteredCard>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
+        <span style={{fontSize:24,color:C.accent}}>◈</span>
+        <span style={{fontSize:20,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
+      </div>
+      {sent ? (
+        <>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:8}}>Check your email</div>
+          <div style={{fontSize:12,color:C.muted,fontFamily:MONO,lineHeight:1.6,marginBottom:14}}>
+            We sent a sign-in link to <span style={{color:C.accent}}>{email}</span>. Click it to come back here. You can close this tab.
+          </div>
+          <button onClick={()=>{setSent(false);setEmail("");}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"8px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Use a different email</button>
+        </>
+      ) : (
+        <form onSubmit={submit}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:6}}>Sign in</div>
+          <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:16}}>
+            We'll email you a one-time link. No password.
+          </div>
+          <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required
+            style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+          <button type="submit" disabled={!email.trim()||sending}
+            style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:email.trim()&&!sending?"pointer":"default",fontFamily:MONO,opacity:email.trim()&&!sending?1:0.4,letterSpacing:"0.05em"}}>
+            {sending?"Sending...":"Send magic link"}
+          </button>
+          {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:10}}>{err}</div>}
+        </form>
+      )}
+    </CenteredCard>
+  );
+}
+
 export default function App() {
+  // === Hooks (all called unconditionally — React rules) ===
+  const auth = useAuth();
+  const userId = auth.user?.id || null;
+  const workoutsState = useWorkouts(userId);
+  const dietState     = useDietLog(userId);
+  const activityState = useActivityLog(userId);
+  const focusState    = useFocusSessions(userId);
+  const boardsState   = useBoards(userId);
+  const customExState = useCustomExercises(userId);
+
+  // UI state
   const [tab, setTab] = useState("home");
   const [screen, setScreen] = useState("home");
-  const [history, setHistory] = usePersistedState("history", []);
-  const [dietLog, setDietLog] = usePersistedState("dietLog", {});
-  const [activeLog, setActiveLog] = usePersistedState("activeLog", {});
-  const [focusSessions, setFocusSessions] = usePersistedState("focusSessions", []);
-  const [boards, setBoards] = usePersistedState("boards", DEFAULT_BOARDS);
-  const [customExercises, setCustomExercises] = usePersistedState("customExercises", {}); // { id: { name, muscle, cat } }
-  function addCustomExercise(name, muscle, cat) {
-    const id = "cx_" + Math.random().toString(36).slice(2,9);
-    setCustomExercises(ce => ({...ce, [id]: { name: name.trim(), muscle, cat, custom: true }}));
-    return id;
-  }
   const [wkInit, setWkInit] = useState(null);
   const [completedWk, setCompletedWk] = useState(null);
-  const [editingWk, setEditingWk] = useState(null); // { workout, index }
+  const [editingWk, setEditingWk] = useState(null);
   const [showRooney, setShowRooney] = useState(false);
+  const [migrationSummary, setMigrationSummary] = useState(null);
 
-  function clearAll() {
-    if (!window.confirm("Clear ALL data? This deletes your workouts, diet, activity, focus sessions, and boards from this browser. Cannot be undone.")) return;
-    clearAllIronStorage();
-    setHistory([]); setDietLog({}); setActiveLog({});
-    setFocusSessions([]); setBoards(DEFAULT_BOARDS);
-    setTab("home"); setScreen("home");
+  // Migrate any pre-existing localStorage data into Supabase on first sign-in
+  useEffect(() => {
+    if (!userId) return;
+    migrateLocalStorage(userId).then(r => {
+      if (r?.migrated && r.summary) {
+        const total = Object.values(r.summary).reduce((a,n)=>a+n,0);
+        if (total > 0) setMigrationSummary(r.summary);
+      }
+    });
+  }, [userId]);
+
+  // === Auth gates (early returns) ===
+  if (!supabaseConfigured) return <SetupRequiredScreen/>;
+  if (auth.loading) return <LoadingScreen text="Loading..."/>;
+  if (!auth.user) return <SignInScreen onSignIn={auth.signInWithMagicLink}/>;
+
+  // === Data from hooks (renamed to match existing code) ===
+  const history = workoutsState.data;
+  const dietLog = dietState.data;
+  const activeLog = activityState.data;
+  const focusSessions = focusState.data;
+  const boards = boardsState.data;
+  const customExercises = customExState.data;
+  const setBoards = boardsState.setAll;
+  const addCustomExercise = (name, muscle, cat) => customExState.add(name, muscle, cat);
+
+  function updateDiet(d,v){ dietState.setForDate(d, v); }
+  function updateActive(d,v){ activityState.setForDate(d, v); }
+  function addSession(s){ focusState.add(s); }
+
+  async function clearAll() {
+    if (!window.confirm("Clear ALL data? This wipes your workouts, diet, activity, focus sessions, boards, and custom exercises from the cloud. Cannot be undone.")) return;
+    await Promise.all([
+      supabase.from("workouts").delete().eq("user_id", userId),
+      supabase.from("diet_log").delete().eq("user_id", userId),
+      supabase.from("activity_log").delete().eq("user_id", userId),
+      supabase.from("focus_sessions").delete().eq("user_id", userId),
+      supabase.from("boards").delete().eq("user_id", userId),
+      supabase.from("custom_exercises").delete().eq("user_id", userId),
+    ]);
+    window.location.reload();
   }
-
-  function updateDiet(d,v){ setDietLog(l=>({...l,[d]:v})); }
-  function updateActive(d,v){ setActiveLog(l=>({...l,[d]:v})); }
-  function addSession(s){ setFocusSessions(ss=>[s,...ss]); }
 
   // Rooney tool handlers — receive structured input from Claude, mutate state, return summary string
   function rooneyLogWorkout(input) {
@@ -1737,7 +1866,7 @@ export default function App() {
       elapsed: durationMinutes * 60,
       exercises,
     };
-    setHistory(h => [workout, ...h].sort((a,b)=>new Date(b.date)-new Date(a.date)));
+    workoutsState.add(workout);
     const exSummary = exercises.length > 0
       ? ` (${exercises.length} exercise${exercises.length>1?"s":""})`
       : "";
@@ -1774,29 +1903,37 @@ export default function App() {
   }
 
   function startWorkout(exercises, name="Quick Workout"){ setWkInit({exercises,name}); setScreen("workout"); }
-  function finishWorkout(wk){ setHistory(h=>[wk,...h]); setCompletedWk(wk); setScreen("summary"); }
+  async function finishWorkout(wk){
+    const saved = await workoutsState.add(wk);
+    setCompletedWk(saved || wk);
+    setScreen("summary");
+  }
 
   function startBackfill(date=null){
     setWkInit({exercises:[], name:"Past Workout", date: date || isoDate()});
     setScreen("backfill");
   }
-  function saveBackfill(wk){
-    setHistory(h=>[wk,...h].sort((a,b)=>new Date(b.date)-new Date(a.date)));
-    setCompletedWk(wk); setScreen("summary");
+  async function saveBackfill(wk){
+    const saved = await workoutsState.add(wk);
+    setCompletedWk(saved || wk);
+    setScreen("summary");
   }
   function openEditWorkout(idx){
     setEditingWk({workout:history[idx], index:idx});
     setScreen("edit");
   }
-  function saveEdit(wk){
-    setHistory(h=>{
-      const next=[...h]; next[editingWk.index]=wk;
-      return next.sort((a,b)=>new Date(b.date)-new Date(a.date));
-    });
+  async function saveEdit(wk){
+    if (editingWk?.workout?.id) {
+      await workoutsState.update(editingWk.workout.id, {
+        name: wk.name, date: wk.date, elapsed: wk.elapsed, exercises: wk.exercises,
+      });
+    }
     setEditingWk(null); setScreen("home");
   }
-  function deleteWorkout(){
-    setHistory(h=>h.filter((_,i)=>i!==editingWk.index));
+  async function deleteWorkout(){
+    if (editingWk?.workout?.id) {
+      await workoutsState.remove(editingWk.workout.id);
+    }
     setEditingWk(null); setScreen("home");
   }
 
@@ -1873,7 +2010,7 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email}/>}
         {tab==="iron"  && <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout}/>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} boards={boards} setBoards={setBoards}/>}
         {tab==="log"   && <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>}
