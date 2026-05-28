@@ -12,13 +12,14 @@ const C = {
   card:    "#141414",
   border:  "#1e1e1e",
   border2: "#2a2a2a",
-  accent:  "#C8F135",
+  accent:  "#FF6B35",  // warm orange brand color
   dim:     "#333",
   muted:   "#555",
   sub:     "#888",
   text:    "#e8e8e8",
-  red:     "#f87171",
-  yellow:  "#fbbf24",
+  red:     "#dc2626",  // darker red = "bad"
+  neutral: "#94a3b8",  // slate gray = middle/"neither good nor bad"
+  yellow:  "#fbbf24",  // decorative only (PR sparkles, board colors)
   green:   "#4ade80",
   blue:    "#38bdf8",
   purple:  "#a78bfa",
@@ -26,8 +27,8 @@ const C = {
 const MONO = "'DM Mono','Courier New',monospace";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const DIET_CONFIG   = { green: { emoji:"🟢", label:"Clean",    color: C.green,  desc:"On plan"        }, yellow: { emoji:"🟡", label:"Decent",   color: C.yellow, desc:"Minor slips"    }, red:    { emoji:"🔴", label:"Off",      color: C.red,    desc:"Off plan"       } };
-const ACTIVE_CONFIG = { green: { emoji:"🟢", label:"Active",   color: C.green,  desc:"Crushed it"     }, yellow: { emoji:"🟡", label:"Moving",   color: C.yellow, desc:"Light movement" }, red:    { emoji:"🔴", label:"Rest",     color: C.red,    desc:"Rest day"       } };
+const DIET_CONFIG   = { green: { emoji:"🟢", label:"Clean",    color: C.green,  desc:"On plan"        }, yellow: { emoji:"⚪", label:"Decent",   color: C.neutral, desc:"Minor slips"    }, red:    { emoji:"🔴", label:"Off",      color: C.red,    desc:"Off plan"       } };
+const ACTIVE_CONFIG = { green: { emoji:"🟢", label:"Active",   color: C.green,  desc:"Crushed it"     }, yellow: { emoji:"⚪", label:"Moving",   color: C.neutral, desc:"Light movement" }, red:    { emoji:"🔴", label:"Rest",     color: C.red,    desc:"Rest day"       } };
 
 const DEFAULT_GOALS = { perfectDays: 3, workouts: 4, dietGreen: 4, dietRed: 1, activeGreen: 4 };
 // Back-compat alias — components that haven't been threaded with the user's
@@ -1334,7 +1335,7 @@ function WorkoutScreen({
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                 <div><div style={{fontSize:14,fontWeight:600,color:C.text,fontFamily:MONO,marginBottom:2}}>{exName}</div><div style={{fontSize:11,color:C.muted,fontFamily:MONO}}>{meta?.muscle} · {meta?.cat}</div></div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                  {exVol>0&&<span style={{fontSize:10,color:C.accent,background:"rgba(200,241,53,0.08)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{(exVol/1000).toFixed(1)}k</span>}
+                  {exVol>0&&<span style={{fontSize:10,color:C.accent,background:"rgba(255,107,53,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{(exVol/1000).toFixed(1)}k</span>}
                   {bestRM>0&&<span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{bestRM}</span>}
                   <button style={{background:"transparent",border:"none",color:C.dim,fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={()=>setExercises(exercises.filter((_,j)=>j!==ei))}>✕</button>
                 </div>
@@ -1469,13 +1470,13 @@ function PRCelebration({ pr, onClose }) {
         position:"relative", textAlign:"center", padding:"36px 32px",
         background:`linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
         border:`1px solid ${C.accent}`, borderRadius:20, maxWidth:360, width:"calc(100% - 32px)",
-        boxShadow:`0 0 60px rgba(200,241,53,0.25), 0 0 120px rgba(200,241,53,0.1)`,
+        boxShadow:`0 0 60px rgba(255,107,53,0.28), 0 0 120px rgba(255,107,53,0.12)`,
         animation:"prPop 0.5s cubic-bezier(0.18, 1.25, 0.5, 1)",
       }}>
         <div style={{fontSize:64,marginBottom:12,animation:"prTrophyBounce 0.8s ease-out"}}>🏆</div>
         <div style={{fontSize:10,letterSpacing:"0.3em",color:C.accent,fontFamily:MONO,fontWeight:700,marginBottom:8}}>NEW PERSONAL RECORD</div>
         <div style={{fontSize:18,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:24}}>{pr.exName}</div>
-        <div style={{fontSize:64,fontWeight:900,color:C.accent,fontFamily:MONO,lineHeight:1,textShadow:"0 0 32px rgba(200,241,53,0.6)",marginBottom:6}}>{pr.rm}</div>
+        <div style={{fontSize:64,fontWeight:900,color:C.accent,fontFamily:MONO,lineHeight:1,textShadow:"0 0 32px rgba(255,107,53,0.6)",marginBottom:6}}>{pr.rm}</div>
         <div style={{fontSize:9,letterSpacing:"0.25em",color:C.muted,fontFamily:MONO,marginBottom:18}}>EST 1RM · LBS</div>
         <div style={{fontSize:12,color:C.muted,fontFamily:MONO,marginBottom:24}}>
           {pr.weight} lbs × {pr.reps} reps
@@ -1884,12 +1885,12 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
 
         {/* Header */}
         <div style={{display:"flex",alignItems:"center",gap:12,padding:"16px 18px",borderBottom:"1px solid #1a1a1a",flexShrink:0}}>
-          <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#C8F135,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#000",fontFamily:"monospace",flexShrink:0}}>R</div>
+          <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#000",fontFamily:"monospace",flexShrink:0}}>R</div>
           <div style={{flex:1}}>
             <div style={{fontSize:14,fontWeight:700,color:"#e8e8e8",fontFamily:"monospace"}}>Rooney</div>
             <div style={{fontSize:10,color:"#444",fontFamily:"monospace"}}>Your personal coach · {memories.length} memor{memories.length===1?"y":"ies"}</div>
           </div>
-          <button title="What Rooney remembers about you" style={{background:"transparent",border:"none",color:memories.length>0?"#C8F135":"#444",fontSize:18,cursor:"pointer",lineHeight:1,marginRight:4}} onClick={()=>setShowMemPanel(true)}>🧠</button>
+          <button title="What Rooney remembers about you" style={{background:"transparent",border:"none",color:memories.length>0?"#FF6B35":"#444",fontSize:18,cursor:"pointer",lineHeight:1,marginRight:4}} onClick={()=>setShowMemPanel(true)}>🧠</button>
           <button style={{background:"transparent",border:"none",color:"#444",fontSize:20,cursor:"pointer",lineHeight:1}} onClick={onClose}>✕</button>
         </div>
 
@@ -1933,7 +1934,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
               {m.toolCalls && m.toolCalls.length>0 && (
                 <div style={{display:"flex",flexDirection:"column",gap:4,maxWidth:"82%"}}>
                   {m.toolCalls.map((tc,ti)=>(
-                    <div key={ti} style={{fontSize:10,color:tc.ok?"#C8F135":"#f87171",fontFamily:"monospace",background:tc.ok?"rgba(200,241,53,0.06)":"rgba(248,113,113,0.06)",border:`1px solid ${tc.ok?"rgba(200,241,53,0.25)":"rgba(248,113,113,0.25)"}`,borderRadius:8,padding:"6px 10px",letterSpacing:"0.02em",lineHeight:1.5}}>
+                    <div key={ti} style={{fontSize:10,color:tc.ok?"#FF6B35":"#dc2626",fontFamily:"monospace",background:tc.ok?"rgba(255,107,53,0.07)":"rgba(220,38,38,0.08)",border:`1px solid ${tc.ok?"rgba(255,107,53,0.3)":"rgba(220,38,38,0.3)"}`,borderRadius:8,padding:"6px 10px",letterSpacing:"0.02em",lineHeight:1.5}}>
                       <span style={{opacity:0.7,marginRight:6}}>{tc.ok?"✓":"⚠"} {tc.name}</span>{tc.summary}
                     </div>
                   ))}
@@ -1941,7 +1942,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
               )}
               <div style={{
                 maxWidth:"82%", padding:"10px 14px", borderRadius: m.role==="user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                background: m.role==="user" ? "#C8F135" : "#1a1a1a",
+                background: m.role==="user" ? "#FF6B35" : "#1a1a1a",
                 color: m.role==="user" ? "#000" : "#e8e8e8",
                 fontSize:13, fontFamily:"monospace", lineHeight:1.55,
                 border: m.role==="assistant" ? "1px solid #222" : "none",
@@ -1976,7 +1977,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
           <input ref={inputRef} style={{flex:1,background:"#161616",border:"1px solid #2a2a2a",borderRadius:12,color:"#e8e8e8",padding:"10px 14px",fontSize:13,fontFamily:"monospace",outline:"none"}}
             placeholder="Ask Rooney anything…" value={input} onChange={e=>setInput(e.target.value)}
             onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}/>
-          <button style={{background:input.trim()?"#C8F135":"#1a1a1a",color:input.trim()?"#000":"#444",border:"none",borderRadius:12,width:44,fontSize:18,cursor:input.trim()?"pointer":"default",transition:"all 0.2s",fontFamily:"monospace"}}
+          <button style={{background:input.trim()?"#FF6B35":"#1a1a1a",color:input.trim()?"#000":"#444",border:"none",borderRadius:12,width:44,fontSize:18,cursor:input.trim()?"pointer":"default",transition:"all 0.2s",fontFamily:"monospace"}}
             onClick={send}>↑</button>
         </div>
       </div>
@@ -2071,7 +2072,7 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
   return (
     <CenteredCard>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
-        <span style={{fontSize:24,color:C.accent}}>◈</span>
+        <span style={{fontSize:24}}>🔥</span>
         <span style={{fontSize:20,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
       </div>
 
@@ -2392,7 +2393,7 @@ export default function App() {
   }
 
   const TABS = [
-    { key:"home",  icon:"◈",  label:"Home"  },
+    { key:"home",  icon:"🏠",  label:"Home"  },
     { key:"iron",  icon:"🏋",  label:"Iron"  },
     { key:"focus", icon:"⬡",  label:"Focus" },
     { key:"log",   icon:"✎",  label:"Log"   },
@@ -2404,7 +2405,7 @@ export default function App() {
       {/* Top bar */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 18px 0"}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:20,color:C.accent}}>◈</span>
+          <span style={{fontSize:20}}>🔥</span>
           <span style={{fontSize:18,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
@@ -2423,7 +2424,7 @@ export default function App() {
 
       {/* Rooney floating button */}
       {!showRooney && (
-        <button onClick={()=>setShowRooney(true)} style={{position:"fixed",bottom:72,right:16,width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#C8F135,#38bdf8)",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#000",fontFamily:"monospace",boxShadow:"0 4px 20px rgba(200,241,53,0.3)",zIndex:30}}>R</button>
+        <button onClick={()=>setShowRooney(true)} style={{position:"fixed",bottom:72,right:16,width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#000",fontFamily:"monospace",boxShadow:"0 4px 20px rgba(255,107,53,0.35)",zIndex:30}}>R</button>
       )}
 
       {/* Rooney overlay */}
