@@ -1544,16 +1544,25 @@ function WorkoutScreen({
                 <div style={{background:"#161616",border:`1px solid ${C.accent}`,borderRadius:10,padding:14,marginBottom:8}}>
                   <div style={{fontSize:11,color:C.accent,fontFamily:MONO,marginBottom:10,letterSpacing:"0.1em",fontWeight:700}}>NEW CUSTOM EXERCISE</div>
                   <input autoFocus value={newExName} onChange={e=>setNewExName(e.target.value)} placeholder="Name (e.g. Bulgarian Split Squat)"
-                    style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
-                  <div style={{display:"flex",gap:8,marginBottom:10}}>
-                    <select value={newExMuscle} onChange={e=>setNewExMuscle(e.target.value)}
-                      style={{flex:1,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
-                      {["Chest","Back","Shoulders","Biceps","Triceps","Traps","Quads","Hamstrings","Glutes","Calves","Core","Cardio","Full Body","Other"].map(m=><option key={m} value={m}>{m}</option>)}
-                    </select>
-                    <select value={newExCat} onChange={e=>setNewExCat(e.target.value)}
-                      style={{flex:1,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
-                      {["Push","Pull","Legs","Arms","Full Body","Cardio"].map(c=><option key={c} value={c}>{c}</option>)}
-                    </select>
+                    style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+                  <div style={{display:"flex",gap:8,marginBottom:6}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:8,color:C.accent,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4,fontWeight:700}}>COUNTS AS (drives goals)</div>
+                      <select value={newExMuscle} onChange={e=>setNewExMuscle(e.target.value)}
+                        style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
+                        {["Chest","Back","Shoulders","Biceps","Triceps","Traps","Quads","Hamstrings","Glutes","Calves","Core","Cardio","Full Body","Other"].map(m=><option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:8,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4,fontWeight:700}}>PICKER TAB</div>
+                      <select value={newExCat} onChange={e=>setNewExCat(e.target.value)}
+                        style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
+                        {["Push","Pull","Legs","Arms","Full Body","Cardio"].map(c=><option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:10,lineHeight:1.4}}>
+                    "Counts as" sets which weekly goal this hits (e.g. Chest, Core for abs, Full Body). Legs = Quads/Hams/Glutes/Calves; Arms = Biceps/Triceps; Abs = Core.
                   </div>
                   <div style={{display:"flex",gap:6}}>
                     <button style={{flex:1,background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:newExName.trim()?"pointer":"default",fontFamily:MONO,opacity:newExName.trim()?1:0.4}}
