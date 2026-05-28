@@ -48,6 +48,7 @@ const MUSCLE_GROUPS = {
 // Goal "kinds": muscle (Nx/week sessions), zone2 (minutes/week),
 // diet_green / active_green (days/week), diet_red (max days/week), workouts (days/week).
 const GOAL_KINDS = {
+  perfect_days: { defaultTarget: 3,  unit: "d",   type: "min" },
   muscle:       { defaultTarget: 1,  unit: "x",   type: "min" },
   zone2:        { defaultTarget: 60, unit: "min", type: "min" },
   diet_green:   { defaultTarget: 4,  unit: "d",   type: "min" },
@@ -58,6 +59,7 @@ const GOAL_KINDS = {
 
 // Andrew's starting goals (editable).
 const DEFAULT_GOAL_LIST = [
+  { id: "g_perfect", kind: "perfect_days", target: 3, label: "Perfect days" },
   { id: "g_chest",  kind: "muscle", group: "Chest",     target: 1, label: "Chest" },
   { id: "g_back",   kind: "muscle", group: "Back",      target: 1, label: "Back" },
   { id: "g_legs",   kind: "muscle", group: "Legs",      target: 1, label: "Legs" },
@@ -104,6 +106,9 @@ function computeGoalProgress(goal, ctx) {
     const days = new Set();
     for (const w of history) { const d = isoDate(new Date(w.date)); if (weekSet.has(d)) days.add(d); }
     got = days.size;
+  } else if (goal.kind === "perfect_days") {
+    const wkoutDays = new Set(history.map(w => isoDate(new Date(w.date))));
+    got = weekDays.filter(d => dietLog[d] === "green" && activeLog[d] === "green" && wkoutDays.has(d)).length;
   }
 
   const hit = meta.type === "max" ? got <= target : got >= target;
@@ -547,7 +552,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
               <div style={{fontSize:11,color:C.muted,fontFamily:MONO,textAlign:"center",padding:"10px 0"}}>No goals set. Tap Edit to add some.</div>
             ) : goalList.map(goal => {
               const p = computeGoalProgress(goal, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises });
-              const color = goal.kind==="zone2" ? C.blue : goal.kind==="diet_red" ? C.red : goal.kind==="muscle" ? C.accent : C.green;
+              const color = goal.kind==="perfect_days" ? C.accent : goal.kind==="zone2" ? C.blue : goal.kind==="diet_red" ? C.red : goal.kind==="muscle" ? C.accent : C.green;
               const targetLabel = p.type==="max" ? `/≤${p.target}${p.unit}` : `/${p.target}${p.unit}`;
               return (
                 <div key={goal.id} style={{marginBottom:11}}>
@@ -2324,13 +2329,13 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
     const meta = GOAL_KINDS[newKind];
     const g = { id: "g_" + Math.random().toString(36).slice(2,8), kind: newKind, target: meta.defaultTarget };
     if (newKind === "muscle") { g.group = newGroup; g.label = newLabel.trim() || newGroup; }
-    else { g.label = newLabel.trim() || ({zone2:"Zone 2",diet_green:"Clean diet days",active_green:"Active days",diet_red:"Red diet days",workouts:"Workout days"}[newKind] || newKind); }
+    else { g.label = newLabel.trim() || ({perfect_days:"Perfect days",zone2:"Zone 2",diet_green:"Clean diet days",active_green:"Active days",diet_red:"Red diet days",workouts:"Workout days"}[newKind] || newKind); }
     setDraft(d => [...d, g]);
     setAdding(false); setNewLabel(""); setNewKind("muscle"); setNewGroup("Chest");
   }
 
   function unitFor(kind) { return GOAL_KINDS[kind]?.unit || ""; }
-  function kindLabel(kind) { return { muscle:"Muscle group", zone2:"Zone 2 minutes", diet_green:"Clean diet days", active_green:"Active days", diet_red:"Red diet days (max)", workouts:"Workout days" }[kind] || kind; }
+  function kindLabel(kind) { return { perfect_days:"Perfect days (diet+active+workout)", muscle:"Muscle group", zone2:"Zone 2 minutes", diet_green:"Clean diet days", active_green:"Active days", diet_red:"Red diet days (max)", workouts:"Workout days" }[kind] || kind; }
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:150,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
@@ -2365,6 +2370,7 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
             <div style={{background:"#161616",border:`1px solid ${C.accent}`,borderRadius:10,padding:12,marginTop:12}}>
               <div style={{fontSize:11,color:C.accent,fontFamily:MONO,marginBottom:10,letterSpacing:"0.1em",fontWeight:700}}>NEW GOAL</div>
               <select value={newKind} onChange={e=>setNewKind(e.target.value)} style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px",fontSize:12,fontFamily:MONO,outline:"none",marginBottom:8}}>
+                <option value="perfect_days">Perfect days/week</option>
                 <option value="muscle">Muscle group (Nx/week)</option>
                 <option value="zone2">Zone 2 minutes/week</option>
                 <option value="diet_green">Clean diet days/week</option>
