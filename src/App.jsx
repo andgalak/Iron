@@ -92,6 +92,9 @@ const DEFAULT_GOAL_LIST = [
 function muscleOfEx(exId, customExercises) {
   return EX_META[exId]?.muscle || customExercises?.[exId]?.muscle || null;
 }
+function catOfEx(exId, customExercises) {
+  return EX_META[exId]?.cat || customExercises?.[exId]?.cat || null;
+}
 
 // Returns { got, target, hit, unit, type, label } for a goal this week.
 function computeGoalProgress(goal, ctx) {
@@ -109,7 +112,10 @@ function computeGoalProgress(goal, ctx) {
       if (!weekSet.has(d)) continue;
       for (const ex of (w.exercises || [])) {
         const m = muscleOfEx(ex.exId, customExercises);
-        if (m && muscles.includes(m)) { days.add(d); break; }
+        const cat = catOfEx(ex.exId, customExercises);
+        // Count if the exercise's muscle is in the group, OR its category matches
+        // the group name (so PT / Legs / Arms / Full Body count by either label).
+        if ((m && muscles.includes(m)) || cat === goal.group) { days.add(d); break; }
       }
     }
     got = days.size;
@@ -1467,7 +1473,7 @@ function WorkoutScreen({
 
   return (
     <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:480,margin:"0 auto"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 16px 12px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.bg,zIndex:10,gap:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 16px 12px",paddingTop:"calc(18px + env(safe-area-inset-top))",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.bg,zIndex:10,gap:8}}>
         <div style={{flex:1,minWidth:0}}>
           {/* Name editable in every mode (N-5) */}
           <input value={workoutName} onChange={e=>setWorkoutName(e.target.value)} placeholder="Workout name" aria-label="Workout name"
@@ -2405,7 +2411,7 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:150,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
       <div style={{background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,maxHeight:"88vh",display:"flex",flexDirection:"column",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#0d0d0d"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",paddingTop:"calc(16px + env(safe-area-inset-top))",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#0d0d0d"}}>
           <div>
             <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Edit Weekly Goals</div>
             <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginTop:2}}>Muscle groups are "hit it N days/week". Zone 2 is minutes/week.</div>
@@ -2742,7 +2748,7 @@ export default function App() {
     <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:480,margin:"0 auto",position:"relative"}}>
 
       {/* Top bar */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 18px 0"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 18px 0",paddingTop:"calc(18px + env(safe-area-inset-top))"}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <BarbellMark size={22}/>
           <span style={{fontSize:18,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
@@ -2803,7 +2809,7 @@ export default function App() {
       )}
 
       {/* Bottom nav */}
-      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20}}>
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
         {TABS.map(t=>{
           const active = tab===t.key;
           return (
