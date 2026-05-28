@@ -487,22 +487,48 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
         ))}
       </div>
 
-      {/* PERFECT DAYS hero card */}
-      <div style={{background:`linear-gradient(135deg, ${C.accent}10, ${C.purple}10)`,border:`1px solid ${C.accent}55`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-          <div>
-            <div style={{fontSize:10,color:C.accent,fontFamily:MONO,letterSpacing:"0.15em",fontWeight:700,marginBottom:4}}>⭐ PERFECT DAYS</div>
-            <div style={{fontSize:11,color:C.sub,fontFamily:MONO,lineHeight:1.5,maxWidth:240}}>Ate clean · was active · did a workout — all three, same day.</div>
+      {/* GOALS — the star of the homepage */}
+      {(() => {
+        const ICONS = { perfect_days:"⭐", zone2:"🫀", diet_green:"🥗", active_green:"👟", diet_red:"🔴", workouts:"🏋", muscle:"💪" };
+        const goalColor = (kind) => kind==="perfect_days"?C.accent : kind==="zone2"?C.blue : kind==="diet_red"?C.red : kind==="muscle"?C.accent : C.green;
+        const progresses = goalList.map(g => ({ goal:g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises }) }));
+        const hitCount = progresses.filter(x => x.p.hit).length;
+        const total = progresses.length;
+        return (
+          <div style={{background:`linear-gradient(160deg, ${C.card}, ${C.surface})`,border:`1px solid ${C.accent}40`,borderRadius:16,padding:"16px 16px 8px",marginBottom:14,boxShadow:`0 0 30px ${C.accent}12`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>THIS WEEK'S GOALS</div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:(total>0&&hitCount===total)?C.accent:C.sub}}>{hitCount}/{total} hit</span>
+                {onEditGoals && <button onClick={onEditGoals} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO,padding:"4px 9px"}}>Edit</button>}
+              </div>
+            </div>
+            {total === 0 ? (
+              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,textAlign:"center",padding:"10px 0 16px"}}>No goals yet. Tap Edit to add some.</div>
+            ) : progresses.map(({goal, p}) => {
+              const color = goalColor(goal.kind);
+              const pct = Math.min(p.got/Math.max(p.target,1),1)*100;
+              const tgt = p.type==="max" ? `≤${p.target}${p.unit}` : `${p.target}${p.unit}`;
+              const over = p.type==="max" && p.got > p.target;
+              return (
+                <div key={goal.id} style={{marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:5}}>
+                    <span style={{fontSize:12.5,color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",gap:7}}>
+                      <span style={{fontSize:14}}>{ICONS[goal.kind]||"•"}</span>{p.label}
+                    </span>
+                    <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:p.hit?color:over?C.red:C.sub}}>
+                      {p.got}<span style={{color:C.dim,fontWeight:400}}>/{tgt}</span>{p.hit?" ✓":""}
+                    </span>
+                  </div>
+                  <div style={{height:11,background:"#0d0d0d",borderRadius:6,overflow:"hidden",border:`1px solid ${C.border}`}}>
+                    <div style={{height:"100%",width:`${pct}%`,borderRadius:5,background:`linear-gradient(90deg, ${color}bb, ${color})`,boxShadow:p.hit?`0 0 12px ${color}99`:"none",transition:"width 0.6s cubic-bezier(0.2,0.8,0.3,1)"}}/>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:34,fontWeight:700,color:C.accent,fontFamily:MONO,lineHeight:1}}>{wkPerfect}</div>
-            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2,letterSpacing:"0.1em"}}>THIS WEEK / GOAL {G.perfectDays}</div>
-          </div>
-        </div>
-        <div style={{height:4,background:C.border,borderRadius:2,marginTop:10}}>
-          <div style={{height:4,borderRadius:2,width:`${Math.min(wkPerfect/Math.max(G.perfectDays,1),1)*100}%`,background:C.accent,transition:"width 0.5s"}}/>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Week/Month toggle */}
       <div style={{display:"flex",gap:4,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:4,marginBottom:14}}>
@@ -542,31 +568,6 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
             </div>
           </div>
 
-          {/* Weekly goals — configurable list */}
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:14}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em"}}>WEEKLY GOALS</div>
-              {onEditGoals && <button onClick={onEditGoals} style={{background:"transparent",border:"none",color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em",textDecoration:"underline"}}>Edit</button>}
-            </div>
-            {goalList.length === 0 ? (
-              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,textAlign:"center",padding:"10px 0"}}>No goals set. Tap Edit to add some.</div>
-            ) : goalList.map(goal => {
-              const p = computeGoalProgress(goal, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises });
-              const color = goal.kind==="perfect_days" ? C.accent : goal.kind==="zone2" ? C.blue : goal.kind==="diet_red" ? C.red : goal.kind==="muscle" ? C.accent : C.green;
-              const targetLabel = p.type==="max" ? `/≤${p.target}${p.unit}` : `/${p.target}${p.unit}`;
-              return (
-                <div key={goal.id} style={{marginBottom:11}}>
-                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                    <span style={{fontSize:11,color:C.sub,fontFamily:MONO}}>{p.label}</span>
-                    <span style={{fontSize:11,fontFamily:MONO,color:p.hit?color:C.muted}}>{p.got}{targetLabel}{p.hit?" ✓":""}</span>
-                  </div>
-                  <div style={{height:3,background:C.border,borderRadius:2}}>
-                    <div style={{height:3,borderRadius:2,width:`${Math.min(p.got/Math.max(p.target,1),1)*100}%`,background:p.hit?color:C.border2,transition:"width 0.5s"}}/>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </>
       ) : (
         <>
