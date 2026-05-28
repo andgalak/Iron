@@ -207,8 +207,8 @@ create policy "own rows: user_settings"
   with check (auth.uid() = user_id);
 
 -- ────────────────────────────────────────────────────────────────────────────
--- ROONEY CONVERSATION: persists the chat thread so Rooney remembers full convos
--- across sessions. One row per user; messages is the display message array.
+-- ROONEY CONVERSATION: one continuous chat thread per user, so Rooney sees the
+-- full prior conversation every time (true continuity, not just stored facts).
 -- ────────────────────────────────────────────────────────────────────────────
 
 create table if not exists public.rooney_conversation (

@@ -42,6 +42,7 @@ const MUSCLE_GROUPS = {
   Arms:        ["Biceps", "Triceps"],
   Legs:        ["Quads", "Hamstrings", "Glutes", "Calves"],
   Abs:         ["Core"],
+  PT:          ["PT"],
   "Full Body": ["Full Body"],
 };
 
@@ -65,6 +66,7 @@ const DEFAULT_GOAL_LIST = [
   { id: "g_legs",   kind: "muscle", group: "Legs",      target: 1, label: "Legs" },
   { id: "g_abs",    kind: "muscle", group: "Abs",       target: 2, label: "Abs" },
   { id: "g_sh",     kind: "muscle", group: "Shoulders", target: 1, label: "Shoulders" },
+  { id: "g_pt",     kind: "muscle", group: "PT",        target: 1, label: "PT" },
   { id: "g_z2",     kind: "zone2",  target: 60, label: "Zone 2" },
   { id: "g_diet",   kind: "diet_green",   target: 4, label: "Clean diet days" },
   { id: "g_active", kind: "active_green", target: 4, label: "Active days" },
@@ -1403,7 +1405,9 @@ function WorkoutScreen({
   function compSets(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).length,0);}
   function e1RM(w,r){if(!w||!r)return 0;return Math.round(w*(1+r/30));}
   const done=compSets(exercises); const vol=totalVol(exercises);
-  const canSave = isLive ? done > 0 : true;
+  // A set with weight + reps filled counts as logged even if the ○ wasn't tapped.
+  const hasData = exercises.some(ex => ex.sets.some(s => s.weight && s.reps));
+  const canSave = isLive ? (done > 0 || hasData) : true;
   const [saving, setSaving] = useState(false);
   // Most recent completed set per exercise, for "last time" reference (M-2). history is date-desc.
   const lastByExercise = (() => {
@@ -1428,7 +1432,12 @@ function WorkoutScreen({
     setSaving(true);
     const finalDate = isLive ? new Date().toISOString() : new Date(date + "T12:00:00").toISOString();
     const finalElapsed = isLive ? Math.round((Date.now() - startTimeRef.current)/1000) : elapsed;
-    await onFinish({exercises, elapsed: finalElapsed, name: workoutName || "Workout", date: finalDate});
+    // Auto-complete any set that has weight + reps but wasn't explicitly ticked.
+    const finalized = exercises.map(ex => ({
+      ...ex,
+      sets: ex.sets.map(s => (s.weight && s.reps && !s.done) ? { ...s, done: true } : s),
+    }));
+    await onFinish({exercises: finalized, elapsed: finalElapsed, name: workoutName || "Workout", date: finalDate});
     // onFinish navigates away; keep saving=true so the button stays locked
   }
   function handleDiscard() {
@@ -1543,7 +1552,7 @@ function WorkoutScreen({
             <div style={{display:"flex",justifyContent:"space-between",padding:"16px 18px",borderBottom:`1px solid ${C.border}`}}><span style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Add Exercise</span><button style={{background:"transparent",border:"none",color:C.muted,fontSize:16,cursor:"pointer"}} onClick={()=>setShowPicker(false)}>✕</button></div>
             <input style={{background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"10px 14px",fontSize:13,margin:"12px 16px 0",outline:"none",fontFamily:MONO}} placeholder="Search…" value={exSearch} onChange={e=>setExSearch(e.target.value)} autoFocus/>
             <div style={{display:"flex",gap:6,padding:"10px 16px",overflowX:"auto",flexShrink:0}}>
-              {["All","Push","Pull","Legs","Arms","Full Body","Cardio"].map(c=><button key={c} style={{borderRadius:20,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO,whiteSpace:"nowrap",flexShrink:0,background:exCat===c?C.accent:"#1a1a1a",color:exCat===c?"#000":C.muted,border:exCat===c?"none":`1px solid ${C.border}`}} onClick={()=>setExCat(c)}>{c}</button>)}
+              {["All","Push","Pull","Legs","Arms","PT","Full Body","Cardio"].map(c=><button key={c} style={{borderRadius:20,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO,whiteSpace:"nowrap",flexShrink:0,background:exCat===c?C.accent:"#1a1a1a",color:exCat===c?"#000":C.muted,border:exCat===c?"none":`1px solid ${C.border}`}} onClick={()=>setExCat(c)}>{c}</button>)}
             </div>
             <div style={{overflowY:"auto",padding:"0 12px 24px"}}>
               {creatingCustom ? (
@@ -1556,14 +1565,14 @@ function WorkoutScreen({
                       <div style={{fontSize:8,color:C.accent,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4,fontWeight:700}}>COUNTS AS (drives goals)</div>
                       <select value={newExMuscle} onChange={e=>setNewExMuscle(e.target.value)}
                         style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
-                        {["Chest","Back","Shoulders","Biceps","Triceps","Traps","Quads","Hamstrings","Glutes","Calves","Core","Cardio","Full Body","Other"].map(m=><option key={m} value={m}>{m}</option>)}
+                        {["Chest","Back","Shoulders","Biceps","Triceps","Traps","Quads","Hamstrings","Glutes","Calves","Core","PT","Cardio","Full Body","Other"].map(m=><option key={m} value={m}>{m}</option>)}
                       </select>
                     </div>
                     <div style={{flex:1}}>
                       <div style={{fontSize:8,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4,fontWeight:700}}>PICKER TAB</div>
                       <select value={newExCat} onChange={e=>setNewExCat(e.target.value)}
                         style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
-                        {["Push","Pull","Legs","Arms","Full Body","Cardio"].map(c=><option key={c} value={c}>{c}</option>)}
+                        {["Push","Pull","Legs","Arms","PT","Full Body","Cardio"].map(c=><option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   </div>
@@ -1658,6 +1667,32 @@ function PRCelebration({ pr, onClose }) {
 // ─── Rooney tools ─────────────────────────────────────────────────────────────
 const EXERCISE_ID_LIST = Object.keys(EXERCISES).join(", ");
 const ROONEY_TOOLS = [
+  {
+    name: "build_workout",
+    description: "Create a workout TEMPLATE for a day — exercises pre-loaded but with EMPTY sets (no weight/reps). Use when Andrew asks you to 'set up a day', 'build me a workout', 'make a template', or recommends a session he'll do. He then opens it from Recent Workouts and fills in the weights himself as he trains. Default date is today. Pick 4-7 exercises that fit what he asked for. For each: give an ex_id from the catalog if one fits; otherwise give a name + muscle + cat and a custom exercise gets created (e.g. name 'Shoulder PT', muscle 'PT', cat 'PT'). Do NOT put in any weights or reps — leave them blank for him to log.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Workout name, e.g. 'Shoulder PT + Push', 'Pull Day'." },
+        date: { type: "string", description: "ISO date YYYY-MM-DD. Default today." },
+        exercises: {
+          type: "array",
+          description: "Exercises to pre-load with empty sets.",
+          items: {
+            type: "object",
+            properties: {
+              ex_id: { type: "string", description: `A catalog id if one fits: ${EXERCISE_ID_LIST}` },
+              name: { type: "string", description: "If no catalog id fits, a name for a new custom exercise." },
+              muscle: { type: "string", description: "For a new exercise: Chest, Back, Shoulders, Biceps, Triceps, Quads, Hamstrings, Glutes, Calves, Core, PT, Cardio, or Full Body. This drives goal-counting." },
+              cat: { type: "string", description: "For a new exercise: Push, Pull, Legs, Arms, PT, Full Body, or Cardio." },
+              sets: { type: "number", description: "How many empty sets to create. Default 3." }
+            }
+          }
+        }
+      },
+      required: ["name", "exercises"]
+    }
+  },
   {
     name: "log_workout",
     description: "Add a past workout to Andrew's history. Use this when Andrew tells you he worked out on a specific day and you have enough detail to record it. If you don't know enough (e.g., he just says 'I worked out yesterday' with no specifics), ask first. Date must be ISO format YYYY-MM-DD; resolve relative phrases like 'yesterday' using today's date from the system prompt.",
@@ -1926,7 +1961,7 @@ You have tools to mutate Andrew's data and your own memory: log_workout, log_die
 - NEVER call a tool to delete or overwrite data without explicit confirmation. log_diet / log_activity overwrite existing values for that date, so confirm if a value is already set.`;
 }
 
-function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], customExercises={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
+function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], customExercises={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onBuildWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
   const GREETING = { role:"assistant", content: "Hey Andrew. I'm Rooney. I remember our past conversations and what you tell me. I can also log past workouts, diet days, activity, Zone 2, or todo cards. What's on your mind?" };
   const [messages, setMessages] = useState(() =>
     (persistedMessages && persistedMessages.length > 0) ? persistedMessages : [GREETING]
@@ -1937,6 +1972,16 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const savedOnceRef = useRef(false);
+  // The conversation loads from Supabase asynchronously. If it arrives after
+  // mount and the user hasn't chatted yet, adopt it so history is continuous.
+  const adoptedRef = useRef(!!(persistedMessages && persistedMessages.length > 0));
+  useEffect(() => {
+    if (adoptedRef.current) return;
+    if (persistedMessages && persistedMessages.length > 0) {
+      adoptedRef.current = true;
+      setMessages(persistedMessages);
+    }
+  }, [persistedMessages]);
 
   // Persist conversation whenever it changes (after the first render)
   useEffect(() => {
@@ -1957,6 +2002,10 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
       if (name === "log_workout") {
         const r = onLogWorkout(input);
         return { ok: true, summary: r.summary };
+      }
+      if (name === "build_workout") {
+        const r = onBuildWorkout(input);
+        return { ok: r.ok !== false, summary: r.summary };
       }
       if (name === "log_diet") {
         const r = onLogDiet(input.date, input.status);
@@ -1996,11 +2045,9 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
 
     const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log, customExercises });
 
-    // Convert displayed messages into API messages (drop UI-only fields)
-    let apiMessages = nextMsgs.map(m => {
-      if (Array.isArray(m.content)) return { role: m.role, content: m.content };
-      return { role: m.role, content: m.content };
-    });
+    // Convert displayed messages into API messages (drop UI-only fields).
+    // Cap to the last 40 turns so a long thread stays affordable + within limits.
+    let apiMessages = nextMsgs.slice(-40).map(m => ({ role: m.role, content: m.content }));
 
     const collectedToolCalls = [];
 
@@ -2513,6 +2560,33 @@ export default function App() {
       : "";
     return { summary: `Logged "${name}" on ${date}, ${durationMinutes} min${exSummary}.` };
   }
+  function rooneyBuildWorkout(input) {
+    const date = input.date || isoDate();
+    const name = input.name || "Workout";
+    const exsInput = Array.isArray(input.exercises) ? input.exercises : [];
+    if (exsInput.length === 0) return { ok: false, summary: "No exercises provided to build a template." };
+
+    const blocks = exsInput.map(e => {
+      let exId = e.ex_id;
+      // Resolve to a valid exId: catalog id → name match → create custom
+      if (!exId || (!EXERCISES[exId] && !customExercises[exId])) {
+        const nameLower = (e.name || "").toLowerCase().trim();
+        const match = Object.entries(EXERCISES).find(([, n]) => n.toLowerCase() === nameLower);
+        if (match) exId = match[0];
+        else if (e.name) exId = addCustomExercise(e.name, e.muscle || "Other", e.cat || "Full Body");
+        else exId = null;
+      }
+      if (!exId) return null;
+      const setCount = Math.max(1, Math.min(8, parseInt(e.sets) || 3));
+      const sets = Array.from({ length: setCount }, () => ({ id: uid(), weight: "", reps: "", done: false }));
+      return { id: uid(), exId, sets, notes: "" };
+    }).filter(Boolean);
+
+    if (blocks.length === 0) return { ok: false, summary: "Couldn't resolve any exercises." };
+    const workout = { name, date: new Date(date + "T12:00:00").toISOString(), elapsed: 0, exercises: blocks };
+    workoutsState.add(workout);
+    return { ok: true, summary: `Built "${name}" for ${date} with ${blocks.length} exercises (empty). Open it from Recent Workouts to log your weights.` };
+  }
   function rooneyLogDiet(date, status) {
     if (!["green","yellow","red"].includes(status)) throw new Error("Invalid status");
     updateDiet(date, status);
@@ -2691,6 +2765,7 @@ export default function App() {
           onSaveConversation={convoState.save}
           onClearConversation={convoState.clear}
           onLogWorkout={rooneyLogWorkout}
+          onBuildWorkout={rooneyBuildWorkout}
           onLogDiet={rooneyLogDiet}
           onLogActivity={rooneyLogActivity}
           onAddCard={rooneyAddCard}

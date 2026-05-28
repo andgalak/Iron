@@ -267,11 +267,15 @@ export function useCustomExercises(userId) {
       });
   }, [userId]);
 
-  async function add(name, muscle, cat) {
+  // IMPORTANT: returns the id SYNCHRONOUSLY (callers use it immediately as exId).
+  // The DB write happens in the background. Making this async caused a crash:
+  // callers got a Promise and React tried to render it as the exId.
+  function add(name, muscle, cat) {
     const id = "cx_" + Math.random().toString(36).slice(2,9);
-    setData(d => ({ ...d, [id]: { name: name.trim(), muscle, cat, custom: true } }));
-    const { error } = await supabase.from("custom_exercises").insert({ id, user_id: userId, name: name.trim(), muscle, cat });
-    if (error) console.error("custom ex add:", error);
+    const clean = (name || "").trim() || "Custom exercise";
+    setData(d => ({ ...d, [id]: { name: clean, muscle, cat, custom: true } }));
+    supabase.from("custom_exercises").insert({ id, user_id: userId, name: clean, muscle, cat })
+      .then(({ error }) => { if (error) console.error("custom ex add:", error); });
     return id;
   }
 
