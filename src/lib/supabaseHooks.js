@@ -37,9 +37,17 @@ export function useAuth() {
     });
   }, []);
 
+  const signInWithPassword = useCallback(async (email, password) => {
+    return supabase.auth.signInWithPassword({ email, password });
+  }, []);
+
+  const updatePassword = useCallback(async (password) => {
+    return supabase.auth.updateUser({ password });
+  }, []);
+
   const signOut = useCallback(async () => supabase.auth.signOut(), []);
 
-  return { user, loading, signInWithMagicLink, verifyCode, signOut };
+  return { user, loading, signInWithMagicLink, verifyCode, signInWithPassword, updatePassword, signOut };
 }
 
 // ─── WORKOUTS ─────────────────────────────────────────────────────────────────

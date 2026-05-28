@@ -279,8 +279,24 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, goals = DEFAULT_GOALS, onEditGoals }) {
+function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOALS, onEditGoals }) {
   const G = goals;
+  const [showPwForm, setShowPwForm] = useState(false);
+  const [newPw, setNewPw] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState(null);
+  async function savePassword(){
+    if (!newPw || newPw.length < 6 || pwBusy || !onUpdatePassword) return;
+    setPwBusy(true); setPwMsg(null);
+    const { error } = await onUpdatePassword(newPw);
+    setPwBusy(false);
+    if (error) setPwMsg({ kind:"err", text: error.message || "Couldn't update password." });
+    else {
+      setPwMsg({ kind:"ok", text: "Password saved. Use it to sign in next time." });
+      setNewPw(""); setShowPwForm(false);
+      setTimeout(()=>setPwMsg(null), 4000);
+    }
+  }
   const today = isoDate();
   const [viewMode, setViewMode] = useState("week"); // "week" | "month"
   const [monthOffset, setMonthOffset] = useState(0);
@@ -582,7 +598,13 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
             Signed in as <span style={{color:C.muted}}>{userEmail}</span>
           </div>
         )}
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+          {onUpdatePassword && (
+            <button style={{background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
+              onClick={()=>{setShowPwForm(s=>!s); setPwMsg(null);}}>
+              {showPwForm ? "Cancel" : "Set / change password"}
+            </button>
+          )}
           {onSignOut && (
             <button style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
               onClick={onSignOut}>Sign out</button>
@@ -590,6 +612,20 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
           <button style={{background:"transparent",border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
             onClick={onClearAll}>Clear all data</button>
         </div>
+        {showPwForm && (
+          <div style={{background:C.card,border:`1px solid ${C.accent}55`,borderRadius:10,padding:12,marginBottom:8}}>
+            <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:8}}>Pick a password (min 6 chars). Browser will offer to save it for autofill.</div>
+            <input type="password" autoComplete="new-password" value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="new password" minLength={6}
+              style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+            <button onClick={savePassword} disabled={newPw.length<6||pwBusy}
+              style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,cursor:newPw.length>=6&&!pwBusy?"pointer":"default",fontFamily:MONO,opacity:newPw.length>=6&&!pwBusy?1:0.4}}>
+              {pwBusy ? "Saving..." : "Save password"}
+            </button>
+          </div>
+        )}
+        {pwMsg && (
+          <div style={{fontSize:10,color:pwMsg.kind==="ok"?C.green:C.red,fontFamily:MONO,marginBottom:8}}>{pwMsg.text}</div>
+        )}
       </div>
 
     </div>
@@ -1983,32 +2019,46 @@ function LoadingScreen({ text="Loading..." }) {
   );
 }
 
-function SignInScreen({ onSignIn, onVerifyCode }) {
+function SignInScreen({ onSignIn, onVerifyCode, onSignInWithPassword }) {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
-  const [sending, setSending] = useState(false);
-  const [verifying, setVerifying] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState(null);
+  const [mode, setMode] = useState(localStorage.getItem("iron_signin_pref") === "code" ? "code" : "password");
 
-  async function submit(e) {
+  async function submitPassword(e) {
     e?.preventDefault();
-    if (!email.trim() || sending) return;
-    setSending(true); setErr(null);
+    if (!email.trim() || !password || busy) return;
+    setBusy(true); setErr(null);
+    const { error } = await onSignInWithPassword(email.trim(), password);
+    setBusy(false);
+    if (error) {
+      setErr(error.message?.includes("Invalid") ? "Wrong email or password." : (error.message || "Sign-in failed."));
+    } else {
+      localStorage.setItem("iron_signin_pref", "password");
+    }
+  }
+
+  async function sendCode(e) {
+    e?.preventDefault();
+    if (!email.trim() || busy) return;
+    setBusy(true); setErr(null);
     const { error } = await onSignIn(email.trim());
-    setSending(false);
-    if (error) setErr(error.message || "Couldn't send the link.");
+    setBusy(false);
+    if (error) setErr(error.message || "Couldn't send the email.");
     else setSent(true);
   }
 
   async function submitCode(e) {
     e?.preventDefault();
-    if (!code.trim() || verifying) return;
-    setVerifying(true); setErr(null);
+    if (!code.trim() || busy) return;
+    setBusy(true); setErr(null);
     const { error } = await onVerifyCode(email.trim(), code.trim());
-    setVerifying(false);
+    setBusy(false);
     if (error) setErr(error.message || "Couldn't verify that code.");
-    // On success, useAuth's onAuthStateChange fires and AuthGate flips the screen
+    else localStorage.setItem("iron_signin_pref", "code");
   }
 
   return (
@@ -2017,43 +2067,76 @@ function SignInScreen({ onSignIn, onVerifyCode }) {
         <span style={{fontSize:24,color:C.accent}}>◈</span>
         <span style={{fontSize:20,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
       </div>
+
       {sent ? (
         <>
           <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:8}}>Check your email</div>
           <div style={{fontSize:12,color:C.muted,fontFamily:MONO,lineHeight:1.6,marginBottom:18}}>
-            We sent a sign-in email to <span style={{color:C.accent}}>{email}</span>. It contains a link AND a 6-digit code.
-            <br/><br/>
-            <span style={{color:C.text}}>Easiest:</span> type the 6-digit code below.
-            <br/>
-            <span style={{color:C.text}}>Or:</span> click the link in the email (must use same browser).
+            Sign-in email sent to <span style={{color:C.accent}}>{email}</span>. Click the link, or type the 6-digit code below.
           </div>
           <form onSubmit={submitCode}>
-            <input
-              type="text" inputMode="numeric" pattern="[0-9]*" maxLength={6} autoComplete="one-time-code"
+            <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={6} autoComplete="one-time-code"
               value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,""))} placeholder="123456" autoFocus
               style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"12px 14px",fontSize:18,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10,letterSpacing:"0.4em",textAlign:"center"}}/>
-            <button type="submit" disabled={code.length<6||verifying}
-              style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:code.length>=6&&!verifying?"pointer":"default",fontFamily:MONO,opacity:code.length>=6&&!verifying?1:0.4,letterSpacing:"0.05em",marginBottom:8}}>
-              {verifying?"Verifying...":"Sign in with code"}
+            <button type="submit" disabled={code.length<6||busy}
+              style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:code.length>=6&&!busy?"pointer":"default",fontFamily:MONO,opacity:code.length>=6&&!busy?1:0.4,letterSpacing:"0.05em",marginBottom:8}}>
+              {busy?"Verifying...":"Sign in with code"}
             </button>
             {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginBottom:8}}>{err}</div>}
           </form>
-          <button onClick={()=>{setSent(false);setCode("");setErr(null);}} style={{background:"transparent",border:"none",color:C.muted,padding:"4px 0",fontSize:11,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>Use a different email</button>
+          <button onClick={()=>{setSent(false);setCode("");setErr(null);}} style={{background:"transparent",border:"none",color:C.muted,padding:"4px 0",fontSize:11,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>Back</button>
         </>
       ) : (
-        <form onSubmit={submit}>
-          <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:6}}>Sign in</div>
-          <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:16}}>
-            We'll email you a one-time code (and a link). No password.
+        <>
+          {/* Tabs */}
+          <div style={{display:"flex",background:"#161616",border:`1px solid ${C.border}`,borderRadius:10,padding:3,marginBottom:18}}>
+            {[
+              {k:"password", label:"Password"},
+              {k:"code", label:"Email code"},
+            ].map(t => (
+              <button key={t.k} onClick={()=>{setMode(t.k);setErr(null);}} style={{
+                flex:1, background: mode===t.k ? C.accent : "transparent",
+                color: mode===t.k ? "#000" : C.muted, border:"none", borderRadius:7,
+                padding:"7px 0", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:MONO, letterSpacing:"0.05em",
+              }}>{t.label}</button>
+            ))}
           </div>
-          <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required
-            style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
-          <button type="submit" disabled={!email.trim()||sending}
-            style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:email.trim()&&!sending?"pointer":"default",fontFamily:MONO,opacity:email.trim()&&!sending?1:0.4,letterSpacing:"0.05em"}}>
-            {sending?"Sending...":"Email me a code"}
-          </button>
-          {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:10}}>{err}</div>}
-        </form>
+
+          {mode === "password" ? (
+            <form onSubmit={submitPassword}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:6}}>Sign in</div>
+              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:16}}>
+                Email and password. Browser can save these for autofill.
+              </div>
+              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required autoComplete="email"
+                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+              <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="password" required autoComplete="current-password"
+                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+              <button type="submit" disabled={!email.trim()||!password||busy}
+                style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:email.trim()&&password&&!busy?"pointer":"default",fontFamily:MONO,opacity:email.trim()&&password&&!busy?1:0.4,letterSpacing:"0.05em"}}>
+                {busy?"Signing in...":"Sign in"}
+              </button>
+              {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:10}}>{err}</div>}
+              <div style={{fontSize:10,color:C.dim,fontFamily:MONO,marginTop:14,textAlign:"center",lineHeight:1.6}}>
+                First time? Don't have a password yet?<br/>Switch to <span style={{color:C.accent,cursor:"pointer",textDecoration:"underline"}} onClick={()=>setMode("code")}>Email code</span> tab. After sign-in you can set a password in your account settings.
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={sendCode}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:6}}>Email me a code</div>
+              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:16}}>
+                We'll send a one-time code/link to your email.
+              </div>
+              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required autoComplete="email"
+                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+              <button type="submit" disabled={!email.trim()||busy}
+                style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:email.trim()&&!busy?"pointer":"default",fontFamily:MONO,opacity:email.trim()&&!busy?1:0.4,letterSpacing:"0.05em"}}>
+                {busy?"Sending...":"Email me a code"}
+              </button>
+              {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:10}}>{err}</div>}
+            </form>
+          )}
+        </>
       )}
     </CenteredCard>
   );
@@ -2148,7 +2231,7 @@ export default function App() {
   // === Auth gates (early returns) ===
   if (!supabaseConfigured) return <SetupRequiredScreen/>;
   if (auth.loading) return <LoadingScreen text="Loading..."/>;
-  if (!auth.user) return <SignInScreen onSignIn={auth.signInWithMagicLink} onVerifyCode={auth.verifyCode}/>;
+  if (!auth.user) return <SignInScreen onSignIn={auth.signInWithMagicLink} onVerifyCode={auth.verifyCode} onSignInWithPassword={auth.signInWithPassword}/>;
 
   // === Data from hooks (renamed to match existing code) ===
   const history = workoutsState.data;
@@ -2359,7 +2442,7 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} goals={mergedGoals} onEditGoals={()=>setShowGoalsEditor(true)}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={mergedGoals} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout}/>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} boards={boards} setBoards={setBoards}/>}
         {tab==="log"   && <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>}
