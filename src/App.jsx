@@ -127,6 +127,7 @@ const DEFAULT_BOARDS = [
 function uid() { return Math.random().toString(36).slice(2,9); }
 function isoDate(d=new Date()) { return d.toISOString().slice(0,10); }
 function e1RM(w, r) { if (!w || !r) return 0; return Math.round(w * (1 + r/30)); }
+function formatDuration(sec) { if (!sec || sec < 60) return `${sec||0}s`; return `${Math.round(sec/60)} min`; }
 function bestRMByExercise(history, excludeId=null) {
   const result = {};
   for (const w of history) {
@@ -642,7 +643,7 @@ function IronTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, on
   function formatElapsed(s){ return formatTime(s); }
   function totalVol(exs){ return exs.reduce((a,ex)=>a+ex.sets.reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0); }
   function compSets(exs){ return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).length,0); }
-  function dayLabel(iso){ const d=new Date(iso+"T12:00:00"); const diff=Math.round((new Date()-d)/86400000); if(diff===0)return"Today"; if(diff===1)return"Yesterday"; if(diff<7)return d.toLocaleDateString("en-US",{weekday:"short"}); return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
+  function dayLabel(iso){ const d=new Date(iso); if(isNaN(d.getTime()))return"Unknown date"; const a=new Date(d);a.setHours(0,0,0,0); const b=new Date();b.setHours(0,0,0,0); const diff=Math.round((b-a)/86400000); if(diff===0)return"Today"; if(diff===1)return"Yesterday"; if(diff>1&&diff<7)return d.toLocaleDateString("en-US",{weekday:"short"}); return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
 
   const PROGRAMS = [
     { id:"ppl", name:"Push Pull Legs", tag:"PPL · 3×/week", days:[
@@ -1206,8 +1207,8 @@ function LogTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, onS
                   }}>
                     <div>
                       <div style={{fontSize:12,color:C.text,fontFamily:MONO}}>{w.name}</div>
-                      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,marginTop:2}}>
-                        {w.exercises.length} ex · {Math.round(w.elapsed/60)} min · {totalVol(w.exercises).toLocaleString()} lbs
+                      <div style={{fontSize:10,color:"#777",fontFamily:MONO,marginTop:2}}>
+                        {w.exercises.length} ex · {formatDuration(w.elapsed)} · {totalVol(w.exercises).toLocaleString()} lbs
                       </div>
                     </div>
                     <span style={{fontSize:14,color:C.dim}}>›</span>
@@ -1271,20 +1272,44 @@ function WorkoutScreen({
     return()=>clearInterval(timerRef.current);
   },[isLive]);
   function startRest(s){clearInterval(restRef.current);setRestLeft(s);restRef.current=setInterval(()=>setRestLeft(r=>{if(r<=1){clearInterval(restRef.current);return null;}return r-1;}),1000);}
-  function totalVol(exs){return exs.reduce((a,ex)=>a+ex.sets.reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);}
+  // Volume + sets count only COMPLETED sets (M-5)
+  function totalVol(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);}
   function compSets(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).length,0);}
   function e1RM(w,r){if(!w||!r)return 0;return Math.round(w*(1+r/30));}
   const done=compSets(exercises); const vol=totalVol(exercises);
   const canSave = isLive ? done > 0 : true;
+  const [saving, setSaving] = useState(false);
+  // Most recent completed set per exercise, for "last time" reference (M-2). history is date-desc.
+  const lastByExercise = (() => {
+    const map = {};
+    for (const w of history) {
+      for (const ex of (w.exercises||[])) {
+        if (map[ex.exId]) continue;
+        const doneSets = (ex.sets||[]).filter(s => s.done && s.weight && s.reps);
+        if (doneSets.length) { const t = doneSets[doneSets.length-1]; map[ex.exId] = { weight: String(t.weight), reps: String(t.reps) }; }
+      }
+    }
+    return map;
+  })();
   const ALL_EX=Object.entries(mergedNames);
   const [exSearch,setExSearch]=useState(""); const [exCat,setExCat]=useState("All");
   const [creatingCustom,setCreatingCustom]=useState(false);
   const [newExName,setNewExName]=useState(""); const [newExMuscle,setNewExMuscle]=useState("Quads"); const [newExCat,setNewExCat]=useState("Legs");
   const filteredEx=ALL_EX.filter(([id,name])=>{const m=mergedMeta[id];return name.toLowerCase().includes(exSearch.toLowerCase())&&(exCat==="All"||m?.cat===exCat);});
 
-  function handleSave() {
+  async function handleSave() {
+    if (saving || !canSave) return; // debounce double-tap (C-2)
+    setSaving(true);
     const finalDate = isLive ? new Date().toISOString() : new Date(date + "T12:00:00").toISOString();
-    onFinish({exercises, elapsed, name: workoutName || "Workout", date: finalDate});
+    await onFinish({exercises, elapsed, name: workoutName || "Workout", date: finalDate});
+    // onFinish navigates away; keep saving=true so the button stays locked
+  }
+  function handleDiscard() {
+    if (isLive && done > 0) {
+      if (window.confirm("Discard this workout? Your logged sets will be lost.")) onCancel();
+    } else {
+      onCancel();
+    }
   }
 
   return (
@@ -1314,9 +1339,9 @@ function WorkoutScreen({
             <button style={{background:"transparent",color:C.red,border:`1px solid ${C.red}55`,borderRadius:8,padding:"8px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO}}
               onClick={()=>{ if(window.confirm("Delete this workout? Cannot be undone.")) onDelete(); }}>Delete</button>
           )}
-          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onCancel}>{isLive?"Discard":"Cancel"}</button>
-          <button style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,cursor:canSave?"pointer":"default",fontFamily:MONO,opacity:canSave?1:0.4}}
-            onClick={canSave?handleSave:undefined}>{isLive?"Finish":"Save"}</button>
+          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={handleDiscard}>{isLive?"Discard":"Cancel"}</button>
+          <button style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"9px 18px",fontSize:12,fontWeight:700,cursor:(canSave&&!saving)?"pointer":"default",fontFamily:MONO,opacity:(canSave&&!saving)?1:0.4}}
+            disabled={!canSave||saving} onClick={handleSave}>{saving?"Saving...":(isLive?"Finish":"Save")}</button>
         </div>
       </div>
       <div style={{display:"flex",justifyContent:"space-around",padding:"10px 0",borderBottom:`1px solid ${C.border}`,background:"#0d0d0d"}}>
@@ -1328,26 +1353,31 @@ function WorkoutScreen({
       <div style={{padding:"12px 12px 100px"}}>
         {exercises.map((item,ei)=>{
           const exName=mergedNames[item.exId]||item.exId; const meta=mergedMeta[item.exId];
-          const exVol=item.sets.reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
+          const exVol=item.sets.filter(s=>s.done).reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
           const bestRM=item.sets.reduce((b,s)=>Math.max(b,e1RM(parseFloat(s.weight),parseInt(s.reps))),0);
+          const lastRef=lastByExercise[item.exId];
           return(
             <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                <div><div style={{fontSize:14,fontWeight:600,color:C.text,fontFamily:MONO,marginBottom:2}}>{exName}</div><div style={{fontSize:11,color:C.muted,fontFamily:MONO}}>{meta?.muscle} · {meta?.cat}</div></div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:600,color:C.text,fontFamily:MONO,marginBottom:2}}>{exName}</div>
+                  <div style={{fontSize:11,color:"#7a7a7a",fontFamily:MONO}}>{meta?.muscle} · {meta?.cat}</div>
+                  {lastRef && <div style={{fontSize:10,color:C.accent,fontFamily:MONO,marginTop:3,opacity:0.85}}>last: {lastRef.weight} × {lastRef.reps}</div>}
+                </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   {exVol>0&&<span style={{fontSize:10,color:C.accent,background:"rgba(255,107,53,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{(exVol/1000).toFixed(1)}k</span>}
                   {bestRM>0&&<span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{bestRM}</span>}
-                  <button style={{background:"transparent",border:"none",color:C.dim,fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={()=>setExercises(exercises.filter((_,j)=>j!==ei))}>✕</button>
+                  <button title="Remove exercise" style={{background:"transparent",border:"none",color:"#7a7a7a",fontSize:14,cursor:"pointer",fontFamily:MONO,width:32,height:32,flexShrink:0}} onClick={()=>setExercises(exercises.filter((_,j)=>j!==ei))}>✕</button>
                 </div>
               </div>
               {item.sets.map((s,si)=>(
-                <div key={s.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
-                  <span style={{width:22,textAlign:"center",fontSize:11,color:C.dim,fontFamily:MONO}}>{si+1}</span>
-                  <input style={{flex:1,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:14,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" placeholder="lbs" value={s.weight} onChange={e=>{const sets=[...item.sets];sets[si]={...s,weight:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
+                <div key={s.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                  <span style={{width:18,textAlign:"center",fontSize:12,color:"#777",fontFamily:MONO}}>{si+1}</span>
+                  <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="decimal" placeholder={lastRef?lastRef.weight:"lbs"} value={s.weight} onChange={e=>{const sets=[...item.sets];sets[si]={...s,weight:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
                   <span style={{color:C.dim,fontSize:12}}>×</span>
-                  <input style={{flex:1,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:14,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" placeholder="reps" value={s.reps} onChange={e=>{const sets=[...item.sets];sets[si]={...s,reps:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
-                  {e1RM(parseFloat(s.weight),parseInt(s.reps))>0&&<span style={{fontSize:10,color:C.muted,fontFamily:MONO,width:40,textAlign:"center"}}>{e1RM(parseFloat(s.weight),parseInt(s.reps))}</span>}
-                  <button style={{width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:700,background:s.done?C.accent:"transparent",color:s.done?"#000":C.dim,border:s.done?"none":`1px solid ${C.border2}`,transition:"all 0.15s",flexShrink:0,fontFamily:MONO}} onClick={()=>{
+                  <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="numeric" placeholder={lastRef?lastRef.reps:"reps"} value={s.reps} onChange={e=>{const sets=[...item.sets];sets[si]={...s,reps:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
+                  {e1RM(parseFloat(s.weight),parseInt(s.reps))>0&&<span style={{fontSize:10,color:C.sub,fontFamily:MONO,width:34,textAlign:"center"}}>{e1RM(parseFloat(s.weight),parseInt(s.reps))}</span>}
+                  <button aria-label="Mark set complete" style={{width:44,height:44,borderRadius:10,cursor:"pointer",fontSize:18,fontWeight:700,background:s.done?C.accent:"transparent",color:s.done?"#000":"#888",border:s.done?"none":`1px solid ${C.border2}`,transition:"all 0.15s",flexShrink:0,fontFamily:MONO,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>{
                     const newDone = !s.done;
                     // PR detection: only on transition to done, for non-cardio, in non-edit mode
                     if (newDone && mode !== "edit" && mergedMeta[item.exId]?.cat !== "Cardio" && !prTriggeredRef.current.has(s.id)) {
@@ -1368,7 +1398,7 @@ function WorkoutScreen({
                     }
                     const sets=[...item.sets];sets[si]={...s,done:newDone};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
                   }}>{s.done?"✓":"○"}</button>
-                  <button style={{width:20,background:"transparent",border:"none",color:C.border2,fontSize:10,cursor:"pointer"}} onClick={()=>{const sets=item.sets.filter((_,j)=>j!==si);setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}>✕</button>
+                  <button aria-label="Delete set" style={{width:36,height:44,background:"transparent",border:"none",color:"#666",fontSize:13,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>{const sets=item.sets.filter((_,j)=>j!==si);setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}>✕</button>
                 </div>
               ))}
               <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border}`,borderRadius:8,color:C.dim,padding:"7px",fontSize:11,cursor:"pointer",marginTop:4,fontFamily:MONO}} onClick={()=>{ const sets=[...item.sets,{id:uid(),weight:"",reps:"",done:false}]; setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex)); }}>+ Add Set</button>
@@ -2456,13 +2486,16 @@ export default function App() {
 
       {/* Bottom nav */}
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20}}>
-        {TABS.map(t=>(
-          <button key={t.key} style={{flex:1,background:"none",border:"none",padding:"10px 0 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}
-            onClick={()=>setTab(t.key)}>
-            <span style={{fontSize:16,color:tab===t.key?C.accent:C.dim}}>{t.icon}</span>
-            <span style={{fontSize:9,color:tab===t.key?C.accent:C.dim,fontFamily:MONO,letterSpacing:"0.08em"}}>{t.label}</span>
-          </button>
-        ))}
+        {TABS.map(t=>{
+          const active = tab===t.key;
+          return (
+            <button key={t.key} style={{flex:1,background:active?C.accent+"12":"none",border:"none",borderTop:`2px solid ${active?C.accent:"transparent"}`,padding:"9px 0 11px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}
+              onClick={()=>setTab(t.key)}>
+              <span style={{fontSize:16,color:active?C.accent:"#6b6b6b",opacity:active?1:0.9}}>{t.icon}</span>
+              <span style={{fontSize:9,color:active?C.accent:"#6b6b6b",fontFamily:MONO,letterSpacing:"0.08em",fontWeight:active?700:400}}>{t.label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
