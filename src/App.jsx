@@ -717,7 +717,7 @@ function IronTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, on
       {/* Recent */}
       {history.length>0&&(
         <>
-          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>RECENT</div>
+          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>RECENT WORKOUTS</div>
           {history.slice(0,5).map((w,i)=>(
             <button key={i} onClick={()=>onOpenEdit(i)} style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:8,cursor:"pointer",textAlign:"left",color:"inherit",font:"inherit",display:"block"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -1263,15 +1263,8 @@ function WorkoutScreen({
   const [elapsed, setElapsed] = useState(initialElapsedSec);
   const [date, setDate] = useState(initialDate || isoDate());
   const [showPicker, setShowPicker] = useState(false);
-  const [restLeft, setRestLeft] = useState(null);
-  const timerRef=useRef(null); const restRef=useRef(null);
   const isLive = mode === "live";
-  useEffect(()=>{
-    if (!isLive) return;
-    timerRef.current=setInterval(()=>setElapsed(e=>e+1),1000);
-    return()=>clearInterval(timerRef.current);
-  },[isLive]);
-  function startRest(s){clearInterval(restRef.current);setRestLeft(s);restRef.current=setInterval(()=>setRestLeft(r=>{if(r<=1){clearInterval(restRef.current);return null;}return r-1;}),1000);}
+  const startTimeRef = useRef(Date.now()); // silently track live workout duration (no visible timer)
   // Volume + sets count only COMPLETED sets (M-5)
   function totalVol(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);}
   function compSets(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).length,0);}
@@ -1301,7 +1294,8 @@ function WorkoutScreen({
     if (saving || !canSave) return; // debounce double-tap (C-2)
     setSaving(true);
     const finalDate = isLive ? new Date().toISOString() : new Date(date + "T12:00:00").toISOString();
-    await onFinish({exercises, elapsed, name: workoutName || "Workout", date: finalDate});
+    const finalElapsed = isLive ? Math.round((Date.now() - startTimeRef.current)/1000) : elapsed;
+    await onFinish({exercises, elapsed: finalElapsed, name: workoutName || "Workout", date: finalDate});
     // onFinish navigates away; keep saving=true so the button stays locked
   }
   function handleDiscard() {
@@ -1316,14 +1310,11 @@ function WorkoutScreen({
     <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:480,margin:"0 auto"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 16px 12px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.bg,zIndex:10,gap:8}}>
         <div style={{flex:1,minWidth:0}}>
+          {/* Name editable in every mode (N-5) */}
+          <input value={workoutName} onChange={e=>setWorkoutName(e.target.value)} placeholder="Workout name" aria-label="Workout name"
+            style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,background:"transparent",border:"none",outline:"none",padding:0,width:"100%"}}/>
           {isLive ? (
-            <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>{workoutName}</div>
-          ) : (
-            <input value={workoutName} onChange={e=>setWorkoutName(e.target.value)} placeholder="Workout name"
-              style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,background:"transparent",border:"none",outline:"none",padding:0,width:"100%"}}/>
-          )}
-          {isLive ? (
-            <div style={{color:C.accent,fontFamily:MONO,fontSize:13}}>{formatTime(elapsed)}</div>
+            <div style={{color:C.muted,fontFamily:MONO,fontSize:11,marginTop:2}}>Today · tap name to rename</div>
           ) : (
             <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4,flexWrap:"wrap"}}>
               <input type="date" value={date} max={isoDate()} onChange={e=>setDate(e.target.value)}
@@ -1349,8 +1340,14 @@ function WorkoutScreen({
           <div key={l} style={{textAlign:"center"}}><div style={{fontSize:17,fontWeight:700,color:C.text,fontFamily:MONO}}>{v}</div><div style={{fontSize:9,color:C.dim,letterSpacing:"0.1em",fontFamily:MONO,marginTop:2}}>{l}</div></div>
         ))}
       </div>
-      {restLeft!==null&&<div style={{display:"flex",alignItems:"center",gap:10,background:C.card,borderBottom:`1px solid ${C.border}`,padding:"8px 16px"}}><span style={{color:C.accent}}>⏱</span><span style={{fontSize:16,fontWeight:700,color:C.accent,fontFamily:MONO,flex:1}}>{formatTime(restLeft)}</span><button style={{background:"transparent",border:"none",color:C.dim,fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={()=>{clearInterval(restRef.current);setRestLeft(null);}}>skip</button></div>}
       <div style={{padding:"12px 12px 100px"}}>
+        {exercises.length===0 && (
+          <div style={{textAlign:"center",padding:"36px 20px 24px",color:C.muted,fontFamily:MONO}}>
+            <div style={{fontSize:32,marginBottom:10}}>🏋</div>
+            <div style={{fontSize:13,color:C.sub}}>No exercises yet</div>
+            <div style={{fontSize:11,color:C.muted,marginTop:4}}>Tap "+ Add Exercise" below to start logging.</div>
+          </div>
+        )}
         {exercises.map((item,ei)=>{
           const exName=mergedNames[item.exId]||item.exId; const meta=mergedMeta[item.exId];
           const exVol=item.sets.filter(s=>s.done).reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
@@ -1406,10 +1403,6 @@ function WorkoutScreen({
           );
         })}
         <button style={{width:"100%",background:"transparent",border:`1px solid ${C.border}`,borderRadius:12,color:C.muted,padding:14,fontSize:13,cursor:"pointer",marginTop:4,fontFamily:MONO}} onClick={()=>setShowPicker(true)}>+ Add Exercise</button>
-        <div style={{display:"flex",gap:8,alignItems:"center",marginTop:14,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
-          <span style={{color:C.dim,fontSize:11,fontFamily:MONO,flexShrink:0}}>Rest:</span>
-          {[60,90,120,180].map(s=><button key={s} style={{background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.muted,padding:"6px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={()=>startRest(s)}>{s<60?`${s}s`:`${s/60}m`}</button>)}
-        </div>
       </div>
       {showPicker&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:100,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
@@ -2454,7 +2447,10 @@ export default function App() {
 
       {/* Rooney floating button */}
       {!showRooney && (
-        <button onClick={()=>setShowRooney(true)} style={{position:"fixed",bottom:72,right:16,width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#000",fontFamily:"monospace",boxShadow:"0 4px 20px rgba(255,107,53,0.35)",zIndex:30}}>R</button>
+        <button onClick={()=>setShowRooney(true)} aria-label="Ask Rooney, your coach" title="Ask Rooney" style={{position:"fixed",bottom:78,right:16,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",zIndex:30,padding:0}}>
+          <span style={{width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#000",fontFamily:"monospace",boxShadow:"0 4px 20px rgba(255,107,53,0.35)"}}>R</span>
+          <span style={{fontSize:8,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",background:C.bg,padding:"1px 5px",borderRadius:6}}>ROONEY</span>
+        </button>
       )}
 
       {/* Rooney overlay */}
