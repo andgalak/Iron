@@ -41,13 +41,21 @@ export function useAuth() {
     return supabase.auth.signInWithPassword({ email, password });
   }, []);
 
+  const signUp = useCallback(async (email, password) => {
+    return supabase.auth.signUp({ email, password });
+  }, []);
+
+  const resetPassword = useCallback(async (email) => {
+    return supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+  }, []);
+
   const updatePassword = useCallback(async (password) => {
     return supabase.auth.updateUser({ password });
   }, []);
 
   const signOut = useCallback(async () => supabase.auth.signOut(), []);
 
-  return { user, loading, signInWithMagicLink, verifyCode, signInWithPassword, updatePassword, signOut };
+  return { user, loading, signInWithMagicLink, verifyCode, signInWithPassword, signUp, resetPassword, updatePassword, signOut };
 }
 
 // ─── WORKOUTS ─────────────────────────────────────────────────────────────────

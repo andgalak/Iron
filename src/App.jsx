@@ -2019,47 +2019,54 @@ function LoadingScreen({ text="Loading..." }) {
   );
 }
 
-function SignInScreen({ onSignIn, onVerifyCode, onSignInWithPassword }) {
+function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
+  const [mode, setMode] = useState("signin"); // signin | signup
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState(false);
   const [err, setErr] = useState(null);
-  const [mode, setMode] = useState(localStorage.getItem("iron_signin_pref") === "code" ? "code" : "password");
+  const [msg, setMsg] = useState(null);
 
-  async function submitPassword(e) {
+  async function submit(e) {
     e?.preventDefault();
-    if (!email.trim() || !password || busy) return;
-    setBusy(true); setErr(null);
-    const { error } = await onSignInWithPassword(email.trim(), password);
-    setBusy(false);
-    if (error) {
-      setErr(error.message?.includes("Invalid") ? "Wrong email or password." : (error.message || "Sign-in failed."));
+    if (busy) return;
+    setErr(null); setMsg(null);
+    if (!email.trim()) { setErr("Enter your email."); return; }
+    if (!password) { setErr("Enter a password."); return; }
+
+    if (mode === "signup") {
+      if (password.length < 6) { setErr("Password must be at least 6 characters."); return; }
+      if (password !== confirm) { setErr("Passwords don't match."); return; }
+      setBusy(true);
+      const { data, error } = await onSignUp(email.trim(), password);
+      setBusy(false);
+      if (error) {
+        setErr(error.message?.includes("already") ? "An account with that email already exists. Switch to Sign in." : (error.message || "Sign-up failed."));
+      } else if (data?.user && !data?.session) {
+        // Email confirmation is still ON in Supabase — tell them
+        setMsg("Account created, but email confirmation is enabled. Disable it in Supabase (Authentication > Providers > Email > turn off Confirm email) for instant sign-in.");
+      }
+      // If session exists, onAuthStateChange flips the screen automatically
     } else {
-      localStorage.setItem("iron_signin_pref", "password");
+      setBusy(true);
+      const { error } = await onSignIn(email.trim(), password);
+      setBusy(false);
+      if (error) setErr(error.message?.includes("Invalid") ? "Wrong email or password." : (error.message || "Sign-in failed."));
     }
   }
 
-  async function sendCode(e) {
-    e?.preventDefault();
-    if (!email.trim() || busy) return;
-    setBusy(true); setErr(null);
-    const { error } = await onSignIn(email.trim());
+  async function forgot() {
+    setErr(null); setMsg(null);
+    if (!email.trim()) { setErr("Type your email above first, then tap Forgot password."); return; }
+    setBusy(true);
+    const { error } = await onResetPassword(email.trim());
     setBusy(false);
-    if (error) setErr(error.message || "Couldn't send the email.");
-    else setSent(true);
+    if (error) setErr(error.message || "Couldn't send reset email.");
+    else setMsg("Password reset email sent. Check your inbox and follow the link to set a new password.");
   }
 
-  async function submitCode(e) {
-    e?.preventDefault();
-    if (!code.trim() || busy) return;
-    setBusy(true); setErr(null);
-    const { error } = await onVerifyCode(email.trim(), code.trim());
-    setBusy(false);
-    if (error) setErr(error.message || "Couldn't verify that code.");
-    else localStorage.setItem("iron_signin_pref", "code");
-  }
+  const isSignup = mode === "signup";
 
   return (
     <CenteredCard>
@@ -2068,76 +2075,42 @@ function SignInScreen({ onSignIn, onVerifyCode, onSignInWithPassword }) {
         <span style={{fontSize:20,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
       </div>
 
-      {sent ? (
-        <>
-          <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:8}}>Check your email</div>
-          <div style={{fontSize:12,color:C.muted,fontFamily:MONO,lineHeight:1.6,marginBottom:18}}>
-            Sign-in email sent to <span style={{color:C.accent}}>{email}</span>. Click the link, or type the 6-digit code below.
-          </div>
-          <form onSubmit={submitCode}>
-            <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength={6} autoComplete="one-time-code"
-              value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,""))} placeholder="123456" autoFocus
-              style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"12px 14px",fontSize:18,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10,letterSpacing:"0.4em",textAlign:"center"}}/>
-            <button type="submit" disabled={code.length<6||busy}
-              style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:code.length>=6&&!busy?"pointer":"default",fontFamily:MONO,opacity:code.length>=6&&!busy?1:0.4,letterSpacing:"0.05em",marginBottom:8}}>
-              {busy?"Verifying...":"Sign in with code"}
-            </button>
-            {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginBottom:8}}>{err}</div>}
-          </form>
-          <button onClick={()=>{setSent(false);setCode("");setErr(null);}} style={{background:"transparent",border:"none",color:C.muted,padding:"4px 0",fontSize:11,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>Back</button>
-        </>
-      ) : (
-        <>
-          {/* Tabs */}
-          <div style={{display:"flex",background:"#161616",border:`1px solid ${C.border}`,borderRadius:10,padding:3,marginBottom:18}}>
-            {[
-              {k:"password", label:"Password"},
-              {k:"code", label:"Email code"},
-            ].map(t => (
-              <button key={t.k} onClick={()=>{setMode(t.k);setErr(null);}} style={{
-                flex:1, background: mode===t.k ? C.accent : "transparent",
-                color: mode===t.k ? "#000" : C.muted, border:"none", borderRadius:7,
-                padding:"7px 0", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:MONO, letterSpacing:"0.05em",
-              }}>{t.label}</button>
-            ))}
-          </div>
+      {/* Tabs */}
+      <div style={{display:"flex",background:"#161616",border:`1px solid ${C.border}`,borderRadius:10,padding:3,marginBottom:18}}>
+        {[{k:"signin",label:"Sign in"},{k:"signup",label:"Sign up"}].map(t => (
+          <button key={t.k} onClick={()=>{setMode(t.k);setErr(null);setMsg(null);}} style={{
+            flex:1, background: mode===t.k ? C.accent : "transparent",
+            color: mode===t.k ? "#000" : C.muted, border:"none", borderRadius:7,
+            padding:"8px 0", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:MONO, letterSpacing:"0.05em",
+          }}>{t.label}</button>
+        ))}
+      </div>
 
-          {mode === "password" ? (
-            <form onSubmit={submitPassword}>
-              <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:6}}>Sign in</div>
-              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:16}}>
-                Email and password. Browser can save these for autofill.
-              </div>
-              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required autoComplete="email"
-                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
-              <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="password" required autoComplete="current-password"
-                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
-              <button type="submit" disabled={!email.trim()||!password||busy}
-                style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:email.trim()&&password&&!busy?"pointer":"default",fontFamily:MONO,opacity:email.trim()&&password&&!busy?1:0.4,letterSpacing:"0.05em"}}>
-                {busy?"Signing in...":"Sign in"}
-              </button>
-              {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:10}}>{err}</div>}
-              <div style={{fontSize:10,color:C.dim,fontFamily:MONO,marginTop:14,textAlign:"center",lineHeight:1.6}}>
-                First time? Don't have a password yet?<br/>Switch to <span style={{color:C.accent,cursor:"pointer",textDecoration:"underline"}} onClick={()=>setMode("code")}>Email code</span> tab. After sign-in you can set a password in your account settings.
-              </div>
-            </form>
-          ) : (
-            <form onSubmit={sendCode}>
-              <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:6}}>Email me a code</div>
-              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:16}}>
-                We'll send a one-time code/link to your email.
-              </div>
-              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required autoComplete="email"
-                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
-              <button type="submit" disabled={!email.trim()||busy}
-                style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:email.trim()&&!busy?"pointer":"default",fontFamily:MONO,opacity:email.trim()&&!busy?1:0.4,letterSpacing:"0.05em"}}>
-                {busy?"Sending...":"Email me a code"}
-              </button>
-              {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:10}}>{err}</div>}
-            </form>
-          )}
-        </>
+      <form onSubmit={submit}>
+        <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,marginBottom:14}}>
+          {isSignup ? "Pick an email and password. That's it — you're in." : "Enter your email and password."}
+        </div>
+        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com" autoFocus required autoComplete="email"
+          style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+        <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="password" required
+          autoComplete={isSignup ? "new-password" : "current-password"}
+          style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+        {isSignup && (
+          <input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="confirm password" required autoComplete="new-password"
+            style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+        )}
+        <button type="submit" disabled={busy}
+          style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"12px",fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",fontFamily:MONO,opacity:busy?0.5:1,letterSpacing:"0.05em",marginTop:4}}>
+          {busy ? (isSignup?"Creating account...":"Signing in...") : (isSignup?"Create account":"Sign in")}
+        </button>
+      </form>
+
+      {!isSignup && (
+        <button onClick={forgot} disabled={busy} style={{background:"transparent",border:"none",color:C.muted,padding:"10px 0 0",fontSize:11,cursor:"pointer",fontFamily:MONO,textDecoration:"underline"}}>Forgot password?</button>
       )}
+
+      {err && <div style={{fontSize:11,color:C.red,fontFamily:MONO,marginTop:12,lineHeight:1.5}}>{err}</div>}
+      {msg && <div style={{fontSize:11,color:C.green,fontFamily:MONO,marginTop:12,lineHeight:1.5}}>{msg}</div>}
     </CenteredCard>
   );
 }
@@ -2231,7 +2204,7 @@ export default function App() {
   // === Auth gates (early returns) ===
   if (!supabaseConfigured) return <SetupRequiredScreen/>;
   if (auth.loading) return <LoadingScreen text="Loading..."/>;
-  if (!auth.user) return <SignInScreen onSignIn={auth.signInWithMagicLink} onVerifyCode={auth.verifyCode} onSignInWithPassword={auth.signInWithPassword}/>;
+  if (!auth.user) return <SignInScreen onSignIn={auth.signInWithPassword} onSignUp={auth.signUp} onResetPassword={auth.resetPassword}/>;
 
   // === Data from hooks (renamed to match existing code) ===
   const history = workoutsState.data;
