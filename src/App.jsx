@@ -27,6 +27,23 @@ const C = {
 };
 const MONO = "'DM Mono','Courier New',monospace";
 
+// Orange barbell logo mark (matches the app icon)
+function BarbellMark({ size = 22, color = "#FF6B35" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 512 512" style={{ display: "block", flexShrink: 0 }}>
+      <g fill={color}>
+        <rect x="150" y="244" width="212" height="24" rx="8"/>
+        <rect x="120" y="200" width="32" height="112" rx="10"/>
+        <rect x="86"  y="222" width="26" height="68"  rx="9"/>
+        <rect x="68"  y="238" width="14" height="36"  rx="6"/>
+        <rect x="360" y="200" width="32" height="112" rx="10"/>
+        <rect x="400" y="222" width="26" height="68"  rx="9"/>
+        <rect x="430" y="238" width="14" height="36"  rx="6"/>
+      </g>
+    </svg>
+  );
+}
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 const DIET_CONFIG   = { green: { emoji:"🟢", label:"Clean",    color: C.green,  desc:"On plan"        }, yellow: { emoji:"⚪", label:"Decent",   color: C.neutral, desc:"Minor slips"    }, red:    { emoji:"🔴", label:"Off",      color: C.red,    desc:"Off plan"       } };
 const ACTIVE_CONFIG = { green: { emoji:"🟢", label:"Active",   color: C.green,  desc:"Crushed it"     }, yellow: { emoji:"⚪", label:"Moving",   color: C.neutral, desc:"Light movement" }, red:    { emoji:"🔴", label:"Rest",     color: C.red,    desc:"Rest day"       } };
@@ -2314,7 +2331,7 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
   return (
     <CenteredCard>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
-        <span style={{fontSize:24}}>🔥</span>
+        <BarbellMark size={26}/>
         <span style={{fontSize:20,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
       </div>
 
@@ -2727,7 +2744,7 @@ export default function App() {
       {/* Top bar */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 18px 0"}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:20}}>🔥</span>
+          <BarbellMark size={22}/>
           <span style={{fontSize:18,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
