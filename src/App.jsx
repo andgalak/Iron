@@ -1532,37 +1532,59 @@ function WorkoutScreen({
                   <button title="Remove exercise" style={{background:"transparent",border:"none",color:"#7a7a7a",fontSize:14,cursor:"pointer",fontFamily:MONO,width:32,height:32,flexShrink:0}} onClick={()=>setExercises(exercises.filter((_,j)=>j!==ei))}>✕</button>
                 </div>
               </div>
-              {item.sets.map((s,si)=>(
+              {item.sets.map((s,si)=>{
+                const rm = e1RM(parseFloat(s.weight),parseInt(s.reps));
+                const rowEmpty = !s.weight && !s.reps;
+                // Most recent completed set above this one in the same exercise
+                let lastCompletedAbove = null;
+                for (let k = si-1; k >= 0; k--) {
+                  const ks = item.sets[k];
+                  if (ks.done && ks.weight && ks.reps) { lastCompletedAbove = ks; break; }
+                }
+                const showCopy = rowEmpty && !s.done && lastCompletedAbove;
+                return (
                 <div key={s.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
                   <span style={{width:18,textAlign:"center",fontSize:12,color:"#777",fontFamily:MONO}}>{si+1}</span>
                   <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="decimal" placeholder={lastRef?lastRef.weight:"lbs"} value={s.weight} onChange={e=>{const sets=[...item.sets];sets[si]={...s,weight:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
                   <span style={{color:C.dim,fontSize:12}}>×</span>
                   <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="numeric" placeholder={lastRef?lastRef.reps:"reps"} value={s.reps} onChange={e=>{const sets=[...item.sets];sets[si]={...s,reps:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
-                  {e1RM(parseFloat(s.weight),parseInt(s.reps))>0&&<span style={{fontSize:10,color:C.sub,fontFamily:MONO,width:34,textAlign:"center"}}>{e1RM(parseFloat(s.weight),parseInt(s.reps))}</span>}
-                  <button aria-label="Mark set complete" style={{width:44,height:44,borderRadius:10,cursor:"pointer",fontSize:18,fontWeight:700,background:s.done?C.accent:"transparent",color:s.done?"#000":"#888",border:s.done?"none":`1px solid ${C.border2}`,transition:"all 0.15s",flexShrink:0,fontFamily:MONO,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>{
+                  {/* middle slot: copy-last-set | e1RM | spacer */}
+                  {showCopy ? (
+                    <button aria-label="Copy weight and reps from last completed set" title="Copy last set"
+                      onClick={()=>{const sets=[...item.sets];sets[si]={...s,weight:lastCompletedAbove.weight,reps:lastCompletedAbove.reps};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}
+                      style={{width:40,height:36,flexShrink:0,background:"transparent",border:`1px solid ${C.border2}`,borderRadius:7,color:C.sub,fontSize:9,fontFamily:MONO,cursor:"pointer",letterSpacing:"0.02em",lineHeight:1.1}}>⧉ copy</button>
+                  ) : rm>0 ? (
+                    <span style={{fontSize:10,color:C.sub,fontFamily:MONO,width:40,textAlign:"center",flexShrink:0}}>{rm}</span>
+                  ) : (
+                    <span style={{width:40,flexShrink:0}}/>
+                  )}
+                  {/* checkbox */}
+                  <button aria-label="Mark set complete" style={{width:44,height:44,flexShrink:0,background:"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}} onClick={()=>{
                     const newDone = !s.done;
+                    if (newDone) { try { if (navigator.vibrate) navigator.vibrate(15); } catch {} }
                     // PR detection: only on transition to done, for non-cardio, in non-edit mode
                     if (newDone && mode !== "edit" && mergedMeta[item.exId]?.cat !== "Cardio" && !prTriggeredRef.current.has(s.id)) {
-                      const rm = e1RM(parseFloat(s.weight), parseInt(s.reps));
-                      if (rm > 0) {
+                      const prm = e1RM(parseFloat(s.weight), parseInt(s.reps));
+                      if (prm > 0) {
                         const prev = prevBestsRef.current[item.exId] || 0;
-                        if (rm > prev) {
+                        if (prm > prev) {
                           prTriggeredRef.current.add(s.id);
-                          prevBestsRef.current[item.exId] = rm;
-                          setActivePR({
-                            exId: item.exId,
-                            exName: mergedNames[item.exId] || item.exId,
-                            rm, prev,
-                            weight: s.weight, reps: s.reps,
-                          });
+                          prevBestsRef.current[item.exId] = prm;
+                          setActivePR({ exId: item.exId, exName: mergedNames[item.exId] || item.exId, rm: prm, prev, weight: s.weight, reps: s.reps });
                         }
                       }
                     }
                     const sets=[...item.sets];sets[si]={...s,done:newDone};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
-                  }}>{s.done?"✓":"○"}</button>
-                  <button aria-label="Delete set" style={{width:36,height:44,background:"transparent",border:"none",color:"#666",fontSize:13,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>{const sets=item.sets.filter((_,j)=>j!==si);setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}>✕</button>
+                  }}>
+                    <svg width="26" height="26" viewBox="0 0 24 24" style={{display:"block"}}>
+                      <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={s.done?C.accent:"transparent"} stroke={s.done?C.accent:C.muted} strokeWidth="2" style={{transition:s.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
+                      {s.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
+                    </svg>
+                  </button>
+                  <button aria-label="Delete set" style={{width:34,height:44,background:"transparent",border:"none",color:"#666",fontSize:13,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>{const sets=item.sets.filter((_,j)=>j!==si);setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}>✕</button>
                 </div>
-              ))}
+                );
+              })}
               <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border}`,borderRadius:8,color:C.dim,padding:"7px",fontSize:11,cursor:"pointer",marginTop:4,fontFamily:MONO}} onClick={()=>{ const sets=[...item.sets,{id:uid(),weight:"",reps:"",done:false}]; setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex)); }}>+ Add Set</button>
             </div>
           );
@@ -2838,6 +2860,7 @@ _s.textContent=`
   20%  { opacity: 0.8; }
   100% { transform: translateY(-22px) scaleY(1.15); opacity: 0; }
 }
+@keyframes checkDraw{from{stroke-dashoffset:22}to{stroke-dashoffset:0}}
 input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}
 *{-webkit-tap-highlight-color:transparent}
 textarea{font-family:'DM Mono','Courier New',monospace}
