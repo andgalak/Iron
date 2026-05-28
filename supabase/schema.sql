@@ -167,3 +167,59 @@ create policy "own rows: rooney_memories"
   on public.rooney_memories for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- ZONE 2 LOG: cardio sessions with a duration in minutes (e.g. "20 min bike").
+-- ────────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.zone2_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  minutes integer not null,
+  label text not null default 'Zone 2',
+  created_at timestamptz not null default now()
+);
+create index if not exists zone2_log_user_date_idx on public.zone2_log (user_id, date desc);
+
+alter table public.zone2_log enable row level security;
+drop policy if exists "own rows: zone2_log" on public.zone2_log;
+create policy "own rows: zone2_log"
+  on public.zone2_log for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- USER SETTINGS: one row per user, holds the configurable weekly goals list.
+-- ────────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.user_settings (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  goals jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.user_settings enable row level security;
+drop policy if exists "own rows: user_settings" on public.user_settings;
+create policy "own rows: user_settings"
+  on public.user_settings for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- ROONEY CONVERSATION: persists the chat thread so Rooney remembers full convos
+-- across sessions. One row per user; messages is the display message array.
+-- ────────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.rooney_conversation (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  messages jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.rooney_conversation enable row level security;
+drop policy if exists "own rows: rooney_conversation" on public.rooney_conversation;
+create policy "own rows: rooney_conversation"
+  on public.rooney_conversation for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);

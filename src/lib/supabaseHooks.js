@@ -316,6 +316,98 @@ export function useRooneyMemories(userId) {
   return { data, loading, add, remove, reload };
 }
 
+// ─── ZONE 2 LOG ───────────────────────────────────────────────────────────────
+export function useZone2Log(userId) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase.from("zone2_log").select("*").eq("user_id", userId).order("date", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) console.error("zone2 load:", error);
+        setData(data || []);
+        setLoading(false);
+      });
+  }, [userId]);
+
+  async function add(date, minutes, label) {
+    const row = { user_id: userId, date, minutes, label: label || "Zone 2" };
+    const { data: inserted, error } = await supabase.from("zone2_log").insert(row).select().single();
+    if (error) { console.error("zone2 add:", error); return null; }
+    setData(d => [inserted, ...d]);
+    return inserted;
+  }
+
+  async function remove(id) {
+    setData(d => d.filter(z => z.id !== id));
+    const { error } = await supabase.from("zone2_log").delete().eq("id", id);
+    if (error) console.error("zone2 delete:", error);
+  }
+
+  return { data, loading, add, remove };
+}
+
+// ─── USER SETTINGS (goals list) ───────────────────────────────────────────────
+export function useSettings(userId, defaultGoals) {
+  const [goals, setGoalsState] = useState(defaultGoals);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase.from("user_settings").select("goals").eq("user_id", userId).maybeSingle()
+      .then(({ data, error }) => {
+        if (error) console.error("settings load:", error);
+        if (data && Array.isArray(data.goals) && data.goals.length > 0) {
+          setGoalsState(data.goals);
+        } else {
+          // No settings row yet — seed with defaults
+          supabase.from("user_settings").upsert({ user_id: userId, goals: defaultGoals, updated_at: new Date().toISOString() }).then(()=>{});
+          setGoalsState(defaultGoals);
+        }
+        setLoading(false);
+      });
+  }, [userId]);
+
+  async function setGoals(next) {
+    setGoalsState(next);
+    const { error } = await supabase.from("user_settings").upsert({ user_id: userId, goals: next, updated_at: new Date().toISOString() });
+    if (error) console.error("settings save:", error);
+  }
+
+  return { goals, loading, setGoals };
+}
+
+// ─── ROONEY CONVERSATION (persisted chat thread) ──────────────────────────────
+export function useRooneyConversation(userId) {
+  const [messages, setMessages] = useState(null); // null = still loading
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase.from("rooney_conversation").select("messages").eq("user_id", userId).maybeSingle()
+      .then(({ data, error }) => {
+        if (error) console.error("conversation load:", error);
+        setMessages(Array.isArray(data?.messages) ? data.messages : []);
+        setLoading(false);
+      });
+  }, [userId]);
+
+  async function save(msgs) {
+    const trimmed = msgs.slice(-120); // cap stored history
+    const { error } = await supabase.from("rooney_conversation").upsert({ user_id: userId, messages: trimmed, updated_at: new Date().toISOString() });
+    if (error) console.error("conversation save:", error);
+  }
+
+  async function clear() {
+    setMessages([]);
+    const { error } = await supabase.from("rooney_conversation").upsert({ user_id: userId, messages: [], updated_at: new Date().toISOString() });
+    if (error) console.error("conversation clear:", error);
+  }
+
+  return { messages, loading, save, clear };
+}
+
 // ─── ONE-TIME MIGRATION: localStorage → Supabase ──────────────────────────────
 const MIG_FLAG = "iron_migrated_to_supabase_v1";
 

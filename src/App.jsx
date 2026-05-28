@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { supabase, supabaseConfigured } from "./lib/supabase";
 import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
-  useFocusSessions, useBoards, useCustomExercises, useRooneyMemories, migrateLocalStorage,
+  useFocusSessions, useBoards, useCustomExercises, useRooneyMemories,
+  useZone2Log, useSettings, useRooneyConversation, migrateLocalStorage,
 } from "./lib/supabaseHooks";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -30,18 +31,85 @@ const MONO = "'DM Mono','Courier New',monospace";
 const DIET_CONFIG   = { green: { emoji:"🟢", label:"Clean",    color: C.green,  desc:"On plan"        }, yellow: { emoji:"⚪", label:"Decent",   color: C.neutral, desc:"Minor slips"    }, red:    { emoji:"🔴", label:"Off",      color: C.red,    desc:"Off plan"       } };
 const ACTIVE_CONFIG = { green: { emoji:"🟢", label:"Active",   color: C.green,  desc:"Crushed it"     }, yellow: { emoji:"⚪", label:"Moving",   color: C.neutral, desc:"Light movement" }, red:    { emoji:"🔴", label:"Rest",     color: C.red,    desc:"Rest day"       } };
 
-const DEFAULT_GOALS = { perfectDays: 3, workouts: 4, dietGreen: 4, dietRed: 1, activeGreen: 4 };
-// Back-compat alias — components that haven't been threaded with the user's
-// edited goals (legacy bits, IronTab) read from this. The dashboard uses the
-// editable user-set goals via the goals prop.
-const WEEKLY_GOALS = DEFAULT_GOALS;
-const GOAL_META = [
-  { key: "perfectDays", emoji: "⭐", label: "Perfect days",    type: "min", hint: "Diet green + active + workout, same day" },
-  { key: "workouts",    emoji: "🏋", label: "Workouts",       type: "min", hint: "Strength or session-logged training" },
-  { key: "dietGreen",   emoji: "🟢", label: "Clean diet days", type: "min", hint: "Days you logged as green diet" },
-  { key: "activeGreen", emoji: "🟢", label: "Active days",     type: "min", hint: "Days you logged as green activity" },
-  { key: "dietRed",     emoji: "🔴", label: "Red diet days",   type: "max", hint: "At most this many off-plan days" },
+// Legacy simple targets — still read by IronTab's stat strip.
+const WEEKLY_GOALS = { workouts: 4, dietGreen: 4, dietRed: 1, activeGreen: 4 };
+
+// Muscle groups map Andrew's mental categories to the EX_META muscle values.
+const MUSCLE_GROUPS = {
+  Chest:       ["Chest"],
+  Back:        ["Back"],
+  Shoulders:   ["Shoulders"],
+  Arms:        ["Biceps", "Triceps"],
+  Legs:        ["Quads", "Hamstrings", "Glutes", "Calves"],
+  Abs:         ["Core"],
+  "Full Body": ["Full Body"],
+};
+
+// Goal "kinds": muscle (Nx/week sessions), zone2 (minutes/week),
+// diet_green / active_green (days/week), diet_red (max days/week), workouts (days/week).
+const GOAL_KINDS = {
+  muscle:       { defaultTarget: 1,  unit: "x",   type: "min" },
+  zone2:        { defaultTarget: 60, unit: "min", type: "min" },
+  diet_green:   { defaultTarget: 4,  unit: "d",   type: "min" },
+  active_green: { defaultTarget: 4,  unit: "d",   type: "min" },
+  diet_red:     { defaultTarget: 1,  unit: "d",   type: "max" },
+  workouts:     { defaultTarget: 4,  unit: "x",   type: "min" },
+};
+
+// Andrew's starting goals (editable).
+const DEFAULT_GOAL_LIST = [
+  { id: "g_chest",  kind: "muscle", group: "Chest",     target: 1, label: "Chest" },
+  { id: "g_back",   kind: "muscle", group: "Back",      target: 1, label: "Back" },
+  { id: "g_legs",   kind: "muscle", group: "Legs",      target: 1, label: "Legs" },
+  { id: "g_abs",    kind: "muscle", group: "Abs",       target: 2, label: "Abs" },
+  { id: "g_sh",     kind: "muscle", group: "Shoulders", target: 1, label: "Shoulders" },
+  { id: "g_z2",     kind: "zone2",  target: 60, label: "Zone 2" },
+  { id: "g_diet",   kind: "diet_green",   target: 4, label: "Clean diet days" },
+  { id: "g_active", kind: "active_green", target: 4, label: "Active days" },
 ];
+
+function muscleOfEx(exId, customExercises) {
+  return EX_META[exId]?.muscle || customExercises?.[exId]?.muscle || null;
+}
+
+// Returns { got, target, hit, unit, type, label } for a goal this week.
+function computeGoalProgress(goal, ctx) {
+  const { history, dietLog, activeLog, zone2Log, weekDays, customExercises } = ctx;
+  const weekSet = new Set(weekDays);
+  const meta = GOAL_KINDS[goal.kind] || { unit: "", type: "min" };
+  const target = goal.target ?? meta.defaultTarget ?? 1;
+  let got = 0;
+
+  if (goal.kind === "muscle") {
+    const muscles = MUSCLE_GROUPS[goal.group] || [];
+    const days = new Set();
+    for (const w of history) {
+      const d = isoDate(new Date(w.date));
+      if (!weekSet.has(d)) continue;
+      for (const ex of (w.exercises || [])) {
+        const m = muscleOfEx(ex.exId, customExercises);
+        if (m && muscles.includes(m)) { days.add(d); break; }
+      }
+    }
+    got = days.size;
+  } else if (goal.kind === "zone2") {
+    got = (zone2Log || []).filter(z => weekSet.has(z.date)).reduce((a, z) => a + (z.minutes || 0), 0);
+  } else if (goal.kind === "diet_green") {
+    got = weekDays.filter(d => dietLog[d] === "green").length;
+  } else if (goal.kind === "active_green") {
+    got = weekDays.filter(d => activeLog[d] === "green").length;
+  } else if (goal.kind === "diet_red") {
+    got = weekDays.filter(d => dietLog[d] === "red").length;
+  } else if (goal.kind === "workouts") {
+    const days = new Set();
+    for (const w of history) { const d = isoDate(new Date(w.date)); if (weekSet.has(d)) days.add(d); }
+    got = days.size;
+  }
+
+  const hit = meta.type === "max" ? got <= target : got >= target;
+  const label = goal.label || goal.group || goal.kind;
+  return { got, target, hit, unit: meta.unit, type: meta.type, label };
+}
 
 const EXERCISES = {
   // Push
@@ -281,8 +349,16 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOALS, onEditGoals }) {
-  const G = goals;
+function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], customExercises = {}, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
+  const goalList = Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST;
+  // Simple reference targets derived from the goal list (for trend goal-lines + perfect-day hero)
+  const G = {
+    perfectDays: 3,
+    workouts:    goalList.find(g=>g.kind==="workouts")?.target ?? 4,
+    dietGreen:   goalList.find(g=>g.kind==="diet_green")?.target ?? 4,
+    activeGreen: goalList.find(g=>g.kind==="active_green")?.target ?? 4,
+    dietRed:     goalList.find(g=>g.kind==="diet_red")?.target ?? 1,
+  };
   const [showPwForm, setShowPwForm] = useState(false);
   const [newPw, setNewPw] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -461,17 +537,30 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, onGoTo, onOpenEdi
             </div>
           </div>
 
-          {/* Weekly goals */}
+          {/* Weekly goals — configurable list */}
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:14}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em"}}>WEEKLY GOALS</div>
               {onEditGoals && <button onClick={onEditGoals} style={{background:"transparent",border:"none",color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em",textDecoration:"underline"}}>Edit</button>}
             </div>
-            <GoalBar label="⭐ Perfect days"  got={wkPerfect}   target={G.perfectDays} color={C.accent}/>
-            <GoalBar label="Workouts"         got={wkWorkouts}  target={G.workouts}    color={C.accent}/>
-            <GoalBar label="Clean diet days"  got={wkDietGreen} target={G.dietGreen}   color={C.green}/>
-            <GoalBar label="Active days"      got={wkActive}    target={G.activeGreen} color={C.green}/>
-            <GoalBar label="Red diet days"    got={wkDietRed}   target={G.dietRed}     color={C.red} invert/>
+            {goalList.length === 0 ? (
+              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,textAlign:"center",padding:"10px 0"}}>No goals set. Tap Edit to add some.</div>
+            ) : goalList.map(goal => {
+              const p = computeGoalProgress(goal, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises });
+              const color = goal.kind==="zone2" ? C.blue : goal.kind==="diet_red" ? C.red : goal.kind==="muscle" ? C.accent : C.green;
+              const targetLabel = p.type==="max" ? `/≤${p.target}${p.unit}` : `/${p.target}${p.unit}`;
+              return (
+                <div key={goal.id} style={{marginBottom:11}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                    <span style={{fontSize:11,color:C.sub,fontFamily:MONO}}>{p.label}</span>
+                    <span style={{fontSize:11,fontFamily:MONO,color:p.hit?color:C.muted}}>{p.got}{targetLabel}{p.hit?" ✓":""}</span>
+                  </div>
+                  <div style={{height:3,background:C.border,borderRadius:2}}>
+                    <div style={{height:3,borderRadius:2,width:`${Math.min(p.got/Math.max(p.target,1),1)*100}%`,background:p.hit?color:C.border2,transition:"width 0.5s"}}/>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </>
       ) : (
@@ -1112,21 +1201,32 @@ function ProgressTab({ history, dietLog, activeLog, focusSessions, onClearAll })
 }
 
 // ─── LOG TAB ──────────────────────────────────────────────────────────────────
-function LogTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, onStartBackfill, onOpenEdit }) {
+function LogTab({ history, dietLog, activeLog, zone2Log = [], onUpdateDiet, onUpdateActive, onAddZone2, onRemoveZone2, onStartBackfill, onOpenEdit }) {
   const [weekOffset, setWeekOffset] = useState(0);
   const days = getWeekDays(weekOffset);
   const today = isoDate();
   const DAY_FULL = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const [z2Adding, setZ2Adding] = useState(null); // date being added to
+  const [z2Mins, setZ2Mins] = useState("");
+  const [z2Label, setZ2Label] = useState("");
 
-  // Index workouts by date for fast lookup
+  // Index workouts + zone2 by date
   const wkByDate = {};
   history.forEach((w, idx) => {
     const d = isoDate(new Date(w.date));
     if (!wkByDate[d]) wkByDate[d] = [];
     wkByDate[d].push({ w, idx });
   });
+  const z2ByDate = {};
+  zone2Log.forEach(z => { (z2ByDate[z.date] ||= []).push(z); });
 
   function totalVol(exs){return exs.reduce((a,ex)=>a+ex.sets.reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);}
+  function submitZone2(d) {
+    const m = parseInt(z2Mins);
+    if (!m || m <= 0) return;
+    onAddZone2(d, m, z2Label.trim() || "Zone 2");
+    setZ2Mins(""); setZ2Label(""); setZ2Adding(null);
+  }
 
   return (
     <div style={{padding:"16px 16px 80px"}}>
@@ -1217,8 +1317,35 @@ function LogTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, onS
                 <button onClick={()=>onStartBackfill(d)} style={{
                   width:"100%", background:"transparent", border:`1px dashed ${C.border2}`,
                   borderRadius:8, color:C.dim, padding:"8px", fontSize:11, cursor:"pointer",
-                  fontFamily:MONO, marginTop:wks.length>0?0:0,
+                  fontFamily:MONO,
                 }}>+ Log workout on this day</button>
+
+                {/* Zone 2 cardio log */}
+                <div style={{fontSize:9,color:C.muted,fontFamily:MONO,margin:"12px 0 6px",letterSpacing:"0.08em"}}>ZONE 2 CARDIO</div>
+                {(z2ByDate[d] || []).map(z => (
+                  <div key={z.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,padding:"7px 10px",marginBottom:6}}>
+                    <span style={{fontSize:12,color:C.text,fontFamily:MONO}}>🫀 {z.label}</span>
+                    <span style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:12,color:C.blue,fontFamily:MONO,fontWeight:700}}>{z.minutes} min</span>
+                      <button title="Remove" onClick={()=>onRemoveZone2(z.id)} style={{background:"transparent",border:"none",color:"#777",fontSize:12,cursor:"pointer"}}>✕</button>
+                    </span>
+                  </div>
+                ))}
+                {z2Adding === d ? (
+                  <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+                    <input type="number" inputMode="numeric" value={z2Mins} onChange={e=>setZ2Mins(e.target.value)} placeholder="min" autoFocus
+                      style={{width:56,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 6px",fontSize:13,fontFamily:MONO,textAlign:"center",outline:"none"}}/>
+                    <input value={z2Label} onChange={e=>setZ2Label(e.target.value)} placeholder="bike ride, jog, etc"
+                      style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:13,fontFamily:MONO,outline:"none"}}/>
+                    <button onClick={()=>submitZone2(d)} style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Add</button>
+                    <button onClick={()=>{setZ2Adding(null);setZ2Mins("");setZ2Label("");}} style={{background:"transparent",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:MONO}}>✕</button>
+                  </div>
+                ) : (
+                  <button onClick={()=>{setZ2Adding(d);setZ2Mins("");setZ2Label("");}} style={{
+                    width:"100%", background:"transparent", border:`1px dashed ${C.border2}`,
+                    borderRadius:8, color:C.dim, padding:"8px", fontSize:11, cursor:"pointer", fontFamily:MONO, marginTop:2,
+                  }}>+ Log Zone 2 (e.g. 20 min bike)</button>
+                )}
               </>
             )}
             {isFuture && (
@@ -1606,7 +1733,12 @@ const ROONEY_TOOLS = [
 ];
 
 function computeObservations({ history, dietLog, activeLog, focusSessions, goals }) {
-  const G = { ...DEFAULT_GOALS, ...(goals || {}) };
+  const gl = Array.isArray(goals) ? goals : [];
+  const G = {
+    perfectDays: 3,
+    workouts:    gl.find(g=>g.kind==="workouts")?.target ?? 4,
+    dietRed:     gl.find(g=>g.kind==="diet_red")?.target ?? 1,
+  };
   const obs = [];
   const today = isoDate();
   const thisWeekDays = getWeekDays(0);
@@ -1673,7 +1805,7 @@ function computeObservations({ history, dietLog, activeLog, focusSessions, goals
   return obs;
 }
 
-function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals }) {
+function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log = [], customExercises = {} }) {
   const today = isoDate();
   const thisWeekDays = getWeekDays(0);
 
@@ -1682,6 +1814,14 @@ function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards
   const wkDietRed   = thisWeekDays.filter(d => dietLog[d] === "red").length;
   const wkActive    = thisWeekDays.filter(d => activeLog[d] === "green").length;
   const wkFocusMins = focusSessions.filter(s => thisWeekDays.includes(s.date)).reduce((a,s)=>a+s.mins,0);
+  const wkZone2Mins = zone2Log.filter(z => thisWeekDays.includes(z.date)).reduce((a,z)=>a+(z.minutes||0),0);
+
+  // Compute progress on the user's configured goals
+  const goalLines = (Array.isArray(goals) ? goals : []).map(g => {
+    const p = computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises });
+    const tgt = p.type === "max" ? `≤${p.target}` : p.target;
+    return `- ${p.label}: ${p.got}/${tgt}${p.unit} ${p.hit ? "(hit)" : "(not yet)"}`;
+  }).join("\n");
 
   const lastWorkout = history[0];
   const totalVol = (wk) => wk.exercises.reduce((a,ex)=>a+ex.sets.reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);
@@ -1709,13 +1849,15 @@ ANDREW'S PROFILE:
 - Learning Modern Greek (~A2 level)
 - Manchester United fan, PC gamer
 
-WEEKLY GOALS (only 3 trackers — diet, activity, workouts):
-- Workouts: 4/week (current: ${wkWorkouts}/4)
-- Clean diet days: 4 green/week (current: ${wkDietGreen}/4)
-- Max red diet days: 1/week (current: ${wkDietRed})
-- Active days: 4 green/week (current: ${wkActive}/4)
+HOW TRACKING WORKS:
+- Andrew logs his lifts (exercises, sets, weights) for progression. He does NOT time workouts — duration doesn't matter, only that he trained.
+- His goals are weekly and mostly "did I hit this muscle group N days this week" (binary-ish), plus Zone 2 minutes and diet/activity days.
+- Zone 2 is cardio logged with a duration (e.g. "20 min bike"). It counts toward his weekly Zone 2 minutes goal.
+- Diet and activity are 3-state daily (green / neutral / red).
+- Focus sessions (deep work timer) are separate and NOT one of his fitness goals.
 
-Focus is NOT a daily traffic-light tracker. Focus sessions are real timed work blocks Andrew logs via the coffee-mug timer on the Focus tab. Use focus minutes/hours as a metric, not as a "did you focus today" yes/no.
+ANDREW'S WEEKLY GOALS (his configured targets, with live progress):
+${goalLines || "- (no goals configured)"}
 
 TODAY (${today}):
 - Diet: ${todayDiet}
@@ -1723,7 +1865,8 @@ TODAY (${today}):
 - Focus session time today: ${todayFocusMins} minutes
 
 THIS WEEK:
-- Workouts completed: ${wkWorkouts}
+- Workout days: ${wkWorkouts}
+- Zone 2: ${wkZone2Mins} minutes
 - Focus session time: ${wkFocusMins} minutes (${Math.round(wkFocusMins/60*10)/10} hours)
 - Diet green days: ${wkDietGreen}, red days: ${wkDietRed}
 - Active (green) days: ${wkActive}
@@ -1768,15 +1911,28 @@ You have tools to mutate Andrew's data and your own memory: log_workout, log_die
 - NEVER call a tool to delete or overwrite data without explicit confirmation. log_diet / log_activity overwrite existing values for that date, so confirm if a value is already set.`;
 }
 
-function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, onLogWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
-  const [messages, setMessages] = useState([
-    { role:"assistant", content: "Hey Andrew. I'm Rooney. I can see your workouts, diet, focus, and boards, and I remember things you tell me across conversations. I can also log past workouts, diet days, activity, or todo cards. What's on your mind?" }
-  ]);
+function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], customExercises={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
+  const GREETING = { role:"assistant", content: "Hey Andrew. I'm Rooney. I remember our past conversations and what you tell me. I can also log past workouts, diet days, activity, Zone 2, or todo cards. What's on your mind?" };
+  const [messages, setMessages] = useState(() =>
+    (persistedMessages && persistedMessages.length > 0) ? persistedMessages : [GREETING]
+  );
   const [showMemPanel, setShowMemPanel] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const savedOnceRef = useRef(false);
+
+  // Persist conversation whenever it changes (after the first render)
+  useEffect(() => {
+    if (!savedOnceRef.current) { savedOnceRef.current = true; return; }
+    if (onSaveConversation && messages.length > 0) onSaveConversation(messages);
+  }, [messages]);
+
+  function newConversation() {
+    setMessages([GREETING]);
+    if (onClearConversation) onClearConversation();
+  }
 
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); }, [messages]);
   useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(), 100); }, []);
@@ -1823,7 +1979,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
     setMessages(nextMsgs);
     setLoading(true);
 
-    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals });
+    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log, customExercises });
 
     // Convert displayed messages into API messages (drop UI-only fields)
     let apiMessages = nextMsgs.map(m => {
@@ -1913,6 +2069,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
             <div style={{fontSize:14,fontWeight:700,color:"#e8e8e8",fontFamily:"monospace"}}>Rooney</div>
             <div style={{fontSize:10,color:"#444",fontFamily:"monospace"}}>Your personal coach · {memories.length} memor{memories.length===1?"y":"ies"}</div>
           </div>
+          <button title="Start a new conversation" style={{background:"transparent",border:"none",color:"#666",fontSize:11,cursor:"pointer",fontFamily:"monospace",lineHeight:1,marginRight:6}} onClick={newConversation}>New</button>
           <button title="What Rooney remembers about you" style={{background:"transparent",border:"none",color:memories.length>0?"#FF6B35":"#444",fontSize:18,cursor:"pointer",lineHeight:1,marginRight:4}} onClick={()=>setShowMemPanel(true)}>🧠</button>
           <button style={{background:"transparent",border:"none",color:"#444",fontSize:20,cursor:"pointer",lineHeight:1}} onClick={onClose}>✕</button>
         </div>
@@ -2140,43 +2297,91 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
 }
 
 function GoalsEditor({ goals, onSave, onClose, onReset }) {
-  const [draft, setDraft] = useState({ ...goals });
-  function set(key, val) {
-    const n = parseInt(val);
-    setDraft(d => ({ ...d, [key]: isNaN(n) ? 0 : Math.max(0, Math.min(7, n)) }));
+  const [draft, setDraft] = useState(() => goals.map(g => ({ ...g })));
+  const [adding, setAdding] = useState(false);
+  const [newKind, setNewKind] = useState("muscle");
+  const [newGroup, setNewGroup] = useState("Chest");
+  const [newLabel, setNewLabel] = useState("");
+
+  function bumpTarget(id, delta) {
+    setDraft(d => d.map(g => g.id === id ? { ...g, target: Math.max(0, Math.min(g.kind==="zone2"?600:14, (g.target||0) + delta)) } : g));
   }
+  function setTarget(id, val) {
+    const n = parseInt(val);
+    setDraft(d => d.map(g => g.id === id ? { ...g, target: isNaN(n) ? 0 : Math.max(0, n) } : g));
+  }
+  function removeGoal(id) { setDraft(d => d.filter(g => g.id !== id)); }
+  function addGoal() {
+    const meta = GOAL_KINDS[newKind];
+    const g = { id: "g_" + Math.random().toString(36).slice(2,8), kind: newKind, target: meta.defaultTarget };
+    if (newKind === "muscle") { g.group = newGroup; g.label = newLabel.trim() || newGroup; }
+    else { g.label = newLabel.trim() || ({zone2:"Zone 2",diet_green:"Clean diet days",active_green:"Active days",diet_red:"Red diet days",workouts:"Workout days"}[newKind] || newKind); }
+    setDraft(d => [...d, g]);
+    setAdding(false); setNewLabel(""); setNewKind("muscle"); setNewGroup("Chest");
+  }
+
+  function unitFor(kind) { return GOAL_KINDS[kind]?.unit || ""; }
+  function kindLabel(kind) { return { muscle:"Muscle group", zone2:"Zone 2 minutes", diet_green:"Clean diet days", active_green:"Active days", diet_red:"Red diet days (max)", workouts:"Workout days" }[kind] || kind; }
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:150,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
       <div style={{background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,maxHeight:"88vh",display:"flex",flexDirection:"column",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#0d0d0d"}}>
           <div>
             <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Edit Weekly Goals</div>
-            <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginTop:2}}>How often you want to hit each per week</div>
+            <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginTop:2}}>Muscle groups are "hit it N days/week". Zone 2 is minutes/week.</div>
           </div>
           <button style={{background:"transparent",border:"none",color:C.muted,fontSize:16,cursor:"pointer"}} onClick={onClose}>✕</button>
         </div>
+
         <div style={{padding:"8px 16px"}}>
-          {GOAL_META.map(m => (
-            <div key={m.key} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 0",borderBottom:`1px solid ${C.border}`}}>
-              <span style={{fontSize:22,width:28,textAlign:"center"}}>{m.emoji}</span>
+          {draft.map(g => (
+            <div key={g.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 0",borderBottom:`1px solid ${C.border}`}}>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,color:C.text,fontFamily:MONO}}>{m.label}</div>
-                <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>
-                  {m.type === "max" ? "at most" : "at least"} this many per week
-                </div>
+                <div style={{fontSize:13,color:C.text,fontFamily:MONO}}>{g.label || g.group || g.kind}</div>
+                <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{kindLabel(g.kind)}{g.kind==="diet_red"?" · at most":""}</div>
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <button style={{width:30,height:30,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>set(m.key, (draft[m.key]||0) - 1)}>−</button>
-                <input type="number" min="0" max="7" value={draft[m.key] ?? 0} onChange={e=>set(m.key, e.target.value)}
-                  style={{width:44,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"6px 0",fontSize:14,fontFamily:MONO,textAlign:"center",outline:"none"}}/>
-                <button style={{width:30,height:30,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>set(m.key, (draft[m.key]||0) + 1)}>+</button>
-                <span style={{fontSize:10,color:C.dim,fontFamily:MONO,width:24,textAlign:"right"}}>/wk</span>
+              <div style={{display:"flex",alignItems:"center",gap:5}}>
+                <button style={{width:28,height:28,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>bumpTarget(g.id, g.kind==="zone2"?-10:-1)}>−</button>
+                <input type="number" min="0" value={g.target ?? 0} onChange={e=>setTarget(g.id, e.target.value)}
+                  style={{width:48,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"6px 0",fontSize:14,fontFamily:MONO,textAlign:"center",outline:"none"}}/>
+                <button style={{width:28,height:28,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>bumpTarget(g.id, g.kind==="zone2"?10:1)}>+</button>
+                <span style={{fontSize:9,color:C.dim,fontFamily:MONO,width:26,textAlign:"right"}}>{unitFor(g.kind)}/wk</span>
+                <button title="Remove goal" style={{width:26,height:26,background:"transparent",border:"none",color:"#777",fontSize:13,cursor:"pointer",flexShrink:0}} onClick={()=>removeGoal(g.id)}>✕</button>
               </div>
             </div>
           ))}
+
+          {adding ? (
+            <div style={{background:"#161616",border:`1px solid ${C.accent}`,borderRadius:10,padding:12,marginTop:12}}>
+              <div style={{fontSize:11,color:C.accent,fontFamily:MONO,marginBottom:10,letterSpacing:"0.1em",fontWeight:700}}>NEW GOAL</div>
+              <select value={newKind} onChange={e=>setNewKind(e.target.value)} style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px",fontSize:12,fontFamily:MONO,outline:"none",marginBottom:8}}>
+                <option value="muscle">Muscle group (Nx/week)</option>
+                <option value="zone2">Zone 2 minutes/week</option>
+                <option value="diet_green">Clean diet days/week</option>
+                <option value="active_green">Active days/week</option>
+                <option value="diet_red">Red diet days (max/week)</option>
+                <option value="workouts">Workout days/week</option>
+              </select>
+              {newKind === "muscle" && (
+                <select value={newGroup} onChange={e=>setNewGroup(e.target.value)} style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px",fontSize:12,fontFamily:MONO,outline:"none",marginBottom:8}}>
+                  {Object.keys(MUSCLE_GROUPS).map(grp => <option key={grp} value={grp}>{grp}</option>)}
+                </select>
+              )}
+              <input value={newLabel} onChange={e=>setNewLabel(e.target.value)} placeholder={newKind==="muscle"?`Label (default: ${newGroup})`:"Label (optional)"}
+                style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+              <div style={{display:"flex",gap:6}}>
+                <button style={{flex:1,background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={addGoal}>Add goal</button>
+                <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAdding(false);setNewLabel("");}}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.accent}`,borderRadius:10,color:C.accent,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO,marginTop:12,letterSpacing:"0.05em"}} onClick={()=>setAdding(true)}>+ Add a goal</button>
+          )}
         </div>
-        <div style={{display:"flex",gap:8,padding:"12px 16px",borderTop:`1px solid ${C.border}`}}>
-          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onReset}>Reset</button>
+
+        <div style={{display:"flex",gap:8,padding:"12px 16px",borderTop:`1px solid ${C.border}`,position:"sticky",bottom:0,background:"#0d0d0d"}}>
+          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onReset}>Reset to defaults</button>
           <div style={{flex:1}}/>
           <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onClose}>Cancel</button>
           <button style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"10px 18px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={()=>onSave(draft)}>Save</button>
@@ -2197,6 +2402,9 @@ export default function App() {
   const boardsState   = useBoards(userId);
   const customExState = useCustomExercises(userId);
   const memoriesState = useRooneyMemories(userId);
+  const zone2State    = useZone2Log(userId);
+  const settingsState = useSettings(userId, DEFAULT_GOAL_LIST);
+  const convoState    = useRooneyConversation(userId);
 
   // UI state
   const [tab, setTab] = useState("home");
@@ -2208,11 +2416,10 @@ export default function App() {
   const [showGoalsEditor, setShowGoalsEditor] = useState(false);
   const [migrationSummary, setMigrationSummary] = useState(null);
 
-  // Editable weekly goals — localStorage-backed for now (low complexity,
-  // doesn't really need cross-device sync since you'd set the same anyway).
-  const [goals, setGoalsRaw] = usePersistedState("iron_goals", DEFAULT_GOALS);
-  const mergedGoals = { ...DEFAULT_GOALS, ...goals };
-  function setGoals(next) { setGoalsRaw({ ...mergedGoals, ...next }); }
+  // Editable weekly goals (configurable list, cloud-synced via user_settings)
+  const goalList = settingsState.goals && settingsState.goals.length ? settingsState.goals : DEFAULT_GOAL_LIST;
+  const setGoalList = settingsState.setGoals;
+  const zone2Log = zone2State.data;
 
   // Migrate any pre-existing localStorage data into Supabase on first sign-in
   useEffect(() => {
@@ -2253,6 +2460,8 @@ export default function App() {
       supabase.from("focus_sessions").delete().eq("user_id", userId),
       supabase.from("boards").delete().eq("user_id", userId),
       supabase.from("custom_exercises").delete().eq("user_id", userId),
+      supabase.from("zone2_log").delete().eq("user_id", userId),
+      supabase.from("rooney_memories").delete().eq("user_id", userId),
     ]);
     window.location.reload();
   }
@@ -2439,10 +2648,10 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={mergedGoals} onEditGoals={()=>setShowGoalsEditor(true)}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} customExercises={customExercises} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout}/>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} boards={boards} setBoards={setBoards}/>}
-        {tab==="log"   && <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>}
+        {tab==="log"   && <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>}
       </div>
 
       {/* Rooney floating button */}
@@ -2459,7 +2668,12 @@ export default function App() {
           history={history} dietLog={dietLog} activeLog={activeLog}
           focusSessions={focusSessions} boards={boards}
           memories={memoriesState.data}
-          goals={mergedGoals}
+          goals={goalList}
+          zone2Log={zone2Log}
+          customExercises={customExercises}
+          persistedMessages={convoState.messages}
+          onSaveConversation={convoState.save}
+          onClearConversation={convoState.clear}
           onLogWorkout={rooneyLogWorkout}
           onLogDiet={rooneyLogDiet}
           onLogActivity={rooneyLogActivity}
@@ -2473,10 +2687,10 @@ export default function App() {
 
       {showGoalsEditor && (
         <GoalsEditor
-          goals={mergedGoals}
-          onSave={(g) => { setGoals(g); setShowGoalsEditor(false); }}
+          goals={goalList}
+          onSave={(g) => { setGoalList(g); setShowGoalsEditor(false); }}
           onClose={() => setShowGoalsEditor(false)}
-          onReset={() => { setGoals(DEFAULT_GOALS); setShowGoalsEditor(false); }}
+          onReset={() => { setGoalList(DEFAULT_GOAL_LIST); setShowGoalsEditor(false); }}
         />
       )}
 
