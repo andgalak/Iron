@@ -83,7 +83,6 @@ const GOAL_KINDS = {
 
 // Andrew's starting goals (editable).
 const DEFAULT_GOAL_LIST = [
-  { id: "g_perfect", kind: "perfect_days", target: 3, label: "Perfect days" },
   { id: "g_chest",  kind: "muscle", group: "Chest",     target: 1, label: "Chest" },
   { id: "g_back",   kind: "muscle", group: "Back",      target: 1, label: "Back" },
   { id: "g_legs",   kind: "muscle", group: "Legs",      target: 1, label: "Legs" },
@@ -2475,7 +2474,6 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
             <div style={{background:"#161616",border:`1px solid ${C.accent}`,borderRadius:10,padding:12,marginTop:12}}>
               <div style={{fontSize:11,color:C.accent,fontFamily:MONO,marginBottom:10,letterSpacing:"0.1em",fontWeight:700}}>NEW GOAL</div>
               <select value={newKind} onChange={e=>setNewKind(e.target.value)} style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px",fontSize:12,fontFamily:MONO,outline:"none",marginBottom:8}}>
-                <option value="perfect_days">Perfect days/week</option>
                 <option value="muscle">Muscle group (Nx/week)</option>
                 <option value="zone2">Zone 2 minutes/week</option>
                 <option value="diet_green">Clean diet days/week</option>
@@ -2537,7 +2535,8 @@ export default function App() {
   const [migrationSummary, setMigrationSummary] = useState(null);
 
   // Editable weekly goals (configurable list, cloud-synced via user_settings)
-  const goalList = settingsState.goals && settingsState.goals.length ? settingsState.goals : DEFAULT_GOAL_LIST;
+  // Drop any legacy perfect_days goals (retired — redundant with the individual goals)
+  const goalList = (settingsState.goals && settingsState.goals.length ? settingsState.goals : DEFAULT_GOAL_LIST).filter(g => g.kind !== "perfect_days");
   const setGoalList = settingsState.setGoals;
   const zone2Log = zone2State.data;
 
@@ -2782,7 +2781,7 @@ export default function App() {
     <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:480,margin:"0 auto",position:"relative"}}>
 
       {/* Top bar */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 18px 0",paddingTop:"calc(18px + env(safe-area-inset-top))"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 18px",paddingTop:"calc(12px + env(safe-area-inset-top))",position:"sticky",top:0,zIndex:25,background:C.bg+"f2",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderBottom:`1px solid ${C.border}`}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <BarbellMark size={28}/>
           <span style={{fontSize:18,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
