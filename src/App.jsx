@@ -2547,6 +2547,15 @@ export default function App() {
   const [editingWk, setEditingWk] = useState(null);
   const [showRooney, setShowRooney] = useState(false);
   const [showGoalsEditor, setShowGoalsEditor] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  async function hardRefresh() {
+    setRefreshing(true);
+    try {
+      if (window.caches) { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); }
+      if ("serviceWorker" in navigator) { const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r => r.unregister())); }
+    } catch (e) { console.error("hardRefresh:", e); }
+    window.location.reload();
+  }
   const [migrationSummary, setMigrationSummary] = useState(null);
 
   // Editable weekly goals (configurable list, cloud-synced via user_settings)
@@ -2801,9 +2810,12 @@ export default function App() {
           <BarbellMark size={28}/>
           <span style={{fontSize:18,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
         </div>
-        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {dietLog[isoDate()]&&<span style={{fontSize:14}}>{DIET_CONFIG[dietLog[isoDate()]].emoji}</span>}
           {activeLog[isoDate()]&&<span style={{fontSize:14}}>{ACTIVE_CONFIG[activeLog[isoDate()]].emoji}</span>}
+          <button onClick={hardRefresh} aria-label="Refresh for the latest version" title="Refresh" style={{background:"transparent",border:"none",color:C.muted,fontSize:17,cursor:"pointer",padding:"2px 4px",lineHeight:1,display:"flex",alignItems:"center"}}>
+            <span style={{display:"inline-block",animation:refreshing?"spin 0.7s linear infinite":"none"}}>⟳</span>
+          </button>
         </div>
       </div>
 
