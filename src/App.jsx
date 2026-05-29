@@ -561,15 +561,6 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
         </div>
       </div>
 
-      {/* Workout — compact start link */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
-        <div>
-          <div style={{fontSize:12,color:C.text,fontFamily:MONO,fontWeight:700}}>Workout</div>
-          <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{todayHasWorkout?`${todayWorkouts} logged today`:"Nothing logged yet"}</div>
-        </div>
-        <button onClick={()=>onGoTo("iron")} style={{background:"transparent",border:`1px solid ${C.accent}`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Start a workout →</button>
-      </div>
-
       {/* GOALS — core part of the homepage */}
       {(() => {
         const ICONS = { perfect_days:"⭐", zone2:"🫀", diet_green:"🥗", active_green:"👟", diet_red:"🔴", workouts:"🏋", muscle:"💪" };
@@ -616,6 +607,14 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
         );
       })()}
 
+      {/* Workout — compact start link (below goals) */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        <div>
+          <div style={{fontSize:12,color:C.text,fontFamily:MONO,fontWeight:700}}>Workout</div>
+          <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{todayHasWorkout?`${todayWorkouts} logged today`:"Nothing logged yet"}</div>
+        </div>
+        <button onClick={()=>onGoTo("iron")} style={{background:"transparent",border:`1px solid ${C.accent}`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Start a workout →</button>
+      </div>
 
       {/* Account + Danger zone */}
       <div style={{marginTop:24,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
