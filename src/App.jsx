@@ -1,4 +1,10 @@
 import { useState, useEffect, useRef } from "react";
+import {
+  DndContext, DragOverlay, closestCorners,
+  MouseSensor, TouchSensor, useSensor, useSensors, useDroppable,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { supabase, supabaseConfigured } from "./lib/supabase";
 import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
@@ -921,8 +927,66 @@ function CoffeeMug({ fillPct, running, timeText }) {
   );
 }
 
+// ─── Kanban drag-and-drop pieces (Trello-style, touch-friendly via @dnd-kit) ──
+const TASK_LANES = ["Today", "In Progress", "Keep in Mind"];
+const TASK_LANE_COLOR = { "Today": C.accent, "In Progress": C.blue, "Keep in Mind": C.muted };
+
+// The visual content of a task card (shared by the sortable card + drag overlay).
+function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging }) {
+  return (
+    <div style={{
+      background: dragging ? "#222" : "#1a1a1a",
+      border: `1px solid ${dragging ? TASK_LANE_COLOR[lane] : C.border2}`,
+      borderRadius: 8, padding: "10px", marginBottom: 6,
+      display: "flex", alignItems: "flex-start", gap: 8,
+      boxShadow: dragging ? "0 8px 24px rgba(0,0,0,0.5)" : "none",
+    }}>
+      {/* Drag handle — the only place that initiates a drag, so taps elsewhere still work */}
+      <span {...(dragHandleProps || {})} aria-label="Drag to reorder" title="Drag to reorder"
+        style={{ flexShrink: 0, width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 15, cursor: "grab", touchAction: "none", lineHeight: 1, marginTop: 0 }}>⠿</span>
+      {lane === "Today" && (
+        <button aria-label="Complete task" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggle && onToggle(card.id); }}
+          style={{ flexShrink: 0, width: 22, height: 22, padding: 0, background: "transparent", border: "none", cursor: "pointer", marginTop: 1 }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" style={{ display: "block" }}>
+            <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2"/>
+            {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"/>}
+          </svg>
+        </button>
+      )}
+      <div style={{ flex: 1, fontSize: 12, color: card.done?C.muted:C.text, fontFamily: MONO, lineHeight: 1.5, textDecoration: card.done?"line-through":"none", minWidth: 0, wordBreak: "break-word" }}>{card.text}</div>
+    </div>
+  );
+}
+
+function SortableTaskCard({ card, lane, onToggle, onOpenMenu }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id });
+  const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+  return (
+    <div ref={setNodeRef} style={style} onClick={()=>onOpenMenu(card.id, lane)}>
+      <TaskCardBody card={card} lane={lane} onToggle={onToggle} dragHandleProps={{ ...attributes, ...listeners }} />
+    </div>
+  );
+}
+
+// A lane is a droppable so cards can be dropped into it even when empty.
+function TaskLane({ lane, color, itemIds, count, children, footer }) {
+  const { setNodeRef, isOver } = useDroppable({ id: lane });
+  return (
+    <div ref={setNodeRef} style={{ flexShrink: 0, width: 230, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 12, transition: "border-color 0.15s" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color, fontFamily: MONO, letterSpacing: "0.06em" }}>{lane.toUpperCase()}</div>
+        <span style={{ fontSize: 11, color: C.dim, fontFamily: MONO }}>{count}</span>
+      </div>
+      <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+        {children}
+      </SortableContext>
+      {footer}
+    </div>
+  );
+}
+
 // ─── FOCUS TAB ────────────────────────────────────────────────────────────────
-function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask, onMoveTask, onRemoveTask }) {
+function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask, onMoveTask, onRemoveTask, onReorder }) {
   const today = isoDate();
   const [timerMins, setTimerMins] = useState(90);
   const [timerInput, setTimerInput] = useState("90");
@@ -932,8 +996,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   const [addingLane, setAddingLane] = useState(null); // lane name being added to
   const [newCardText, setNewCardText] = useState("");
   const [menuCard, setMenuCard] = useState(null); // { id, lane } for the move/action sheet
-  const [dragging, setDragging] = useState(null); // { cardId, lane } (desktop drag)
-  const [dragOver, setDragOver] = useState(null); // lane name
+  const [activeId, setActiveId] = useState(null); // card id currently being dragged
   const timerRef = useRef(null);
   const totalSecs = timerMins * 60;
   const remaining = Math.max(totalSecs - elapsed, 0);
@@ -956,14 +1019,61 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   const todayMins = focusSessions.filter(s=>s.date===today).reduce((a,s)=>a+s.mins,0);
   const weekMins  = focusSessions.filter(s=>getWeekDays(0).includes(s.date)).reduce((a,s)=>a+s.mins,0);
 
-  const LANES = ["Today", "In Progress", "Keep in Mind"];
-  const laneColor = { "Today": C.accent, "In Progress": C.blue, "Keep in Mind": C.muted };
-  function cardsForLane(name) {
-    const col = board?.cols?.find(c => c.name === name);
-    if (!col) return [];
-    // Completed cards sink to the bottom (only Today lane tracks completion)
-    return [...col.cards].sort((a,b) => (a.done?1:0) - (b.done?1:0));
+  const LANES = TASK_LANES;
+  const laneColor = TASK_LANE_COLOR;
+
+  // Local lane→[cardId] ordering that drives the board; synced from the cloud
+  // board whenever we're not mid-drag, committed back on drop.
+  function laneItemsFromBoard(b) {
+    const out = {};
+    LANES.forEach(lane => { const col = b?.cols?.find(c=>c.name===lane); out[lane] = col ? col.cards.map(k=>k.id) : []; });
+    return out;
   }
+  const [laneItems, setLaneItems] = useState(()=>laneItemsFromBoard(board));
+  useEffect(()=>{ if(!activeId) setLaneItems(laneItemsFromBoard(board)); }, [board, activeId]);
+
+  const cardById = {};
+  (board?.cols||[]).forEach(c=>c.cards.forEach(k=>{ cardById[k.id]=k; }));
+  function laneCards(lane) { return (laneItems[lane]||[]).map(id=>cardById[id]).filter(Boolean); }
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
+  );
+  function findLane(id) {
+    if (LANES.includes(id)) return id;
+    return LANES.find(lane => (laneItems[lane]||[]).includes(id));
+  }
+  function handleDragStart({ active }) { setActiveId(active.id); }
+  function handleDragOver({ active, over }) {
+    if (!over) return;
+    const from = findLane(active.id);
+    const to = findLane(over.id);
+    if (!from || !to || from === to) return;
+    setLaneItems(prev => {
+      const fromIds = (prev[from] || []).filter(id => id !== active.id);
+      const toIds = [...(prev[to] || [])];
+      const overIdx = LANES.includes(over.id) ? toIds.length : toIds.indexOf(over.id);
+      toIds.splice(overIdx < 0 ? toIds.length : overIdx, 0, active.id);
+      return { ...prev, [from]: fromIds, [to]: toIds };
+    });
+  }
+  function handleDragEnd({ active, over }) {
+    if (!over) { setActiveId(null); return; }
+    const from = findLane(active.id);
+    const to = findLane(over.id);
+    let next = laneItems;
+    if (from && to && from === to) {
+      const ids = laneItems[from] || [];
+      const oldIndex = ids.indexOf(active.id);
+      const newIndex = LANES.includes(over.id) ? ids.length - 1 : ids.indexOf(over.id);
+      if (oldIndex >= 0 && newIndex >= 0 && oldIndex !== newIndex) next = { ...laneItems, [from]: arrayMove(ids, oldIndex, newIndex) };
+    }
+    setLaneItems(next);
+    if (onReorder) onReorder(next);
+    setActiveId(null);
+  }
+
   function submitCard(laneName) {
     if (!newCardText.trim()) return;
     onAddTask(laneName, newCardText);
@@ -1038,56 +1148,42 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
         </div>
       )}
 
-      {/* Single board — 3 fixed lanes */}
+      {/* Single board — 3 fixed lanes, Trello-style drag + reorder (touch-friendly) */}
       <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:10,fontWeight:700}}>TASKS</div>
-      <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:8}}>
-        {LANES.map(lane=>{
-          const lc = laneColor[lane];
-          const cards = cardsForLane(lane);
-          return (
-            <div key={lane} style={{flexShrink:0,width:230,background:C.card,border:`1px solid ${dragOver===lane?lc:C.border}`,borderRadius:12,padding:12}}
-              onDragOver={e=>{e.preventDefault();setDragOver(lane);}}
-              onDrop={e=>{ if(dragging&&dragging.lane!==lane){onMoveTask(dragging.cardId,lane);} setDragging(null);setDragOver(null); }}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{fontSize:11,fontWeight:700,color:lc,fontFamily:MONO,letterSpacing:"0.06em"}}>{lane.toUpperCase()}</div>
-                <span style={{fontSize:11,color:C.dim,fontFamily:MONO}}>{cards.length}</span>
-              </div>
-              {cards.map(card=>(
-                <div key={card.id} draggable
-                  onDragStart={()=>setDragging({cardId:card.id,lane})}
-                  onClick={()=>setMenuCard({id:card.id, lane})}
-                  style={{background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,padding:"10px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"flex-start",gap:8}}>
-                  {lane==="Today" && (
-                    <button aria-label="Complete task" onClick={e=>{e.stopPropagation(); if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id);}}
-                      style={{flexShrink:0,width:22,height:22,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" style={{display:"block"}}>
-                        <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
-                        {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
-                      </svg>
-                    </button>
-                  )}
-                  <div style={{flex:1,fontSize:12,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
-                </div>
-              ))}
-              {addingLane===lane
-                ? <div>
-                    <textarea style={{width:"100%",background:"#1a1a1a",border:`1px solid ${lc}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",resize:"none",boxSizing:"border-box",minHeight:56}}
-                      autoFocus value={newCardText} onChange={e=>setNewCardText(e.target.value)}
-                      onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submitCard(lane);}if(e.key==="Escape"){setAddingLane(null);setNewCardText("");}}}
-                      placeholder="Task…"/>
-                    <div style={{display:"flex",gap:6,marginTop:6}}>
-                      <button style={{flex:1,background:lc,color:"#000",border:"none",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer",fontFamily:MONO,fontWeight:700}} onClick={()=>submitCard(lane)}>Add</button>
-                      <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAddingLane(null);setNewCardText("");}}>Cancel</button>
-                    </div>
-                  </div>
-                : <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border2}`,borderRadius:8,padding:"7px",fontSize:11,color:C.dim,cursor:"pointer",fontFamily:MONO,marginTop:2}}
-                    onClick={()=>{setAddingLane(lane);setNewCardText("");}}>+ Add task</button>
-              }
-            </div>
-          );
-        })}
-      </div>
-      <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>Tap a task to move it between lanes, complete, or delete. Today tasks show on your Home checklist.</div>
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd} onDragCancel={()=>setActiveId(null)}>
+        <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:8}}>
+          {LANES.map(lane=>{
+            const lc = laneColor[lane];
+            const cards = laneCards(lane);
+            return (
+              <TaskLane key={lane} lane={lane} color={lc} itemIds={cards.map(c=>c.id)} count={cards.length}
+                footer={
+                  addingLane===lane
+                    ? <div>
+                        <textarea style={{width:"100%",background:"#1a1a1a",border:`1px solid ${lc}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",resize:"none",boxSizing:"border-box",minHeight:56}}
+                          autoFocus value={newCardText} onChange={e=>setNewCardText(e.target.value)}
+                          onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submitCard(lane);}if(e.key==="Escape"){setAddingLane(null);setNewCardText("");}}}
+                          placeholder="Task…"/>
+                        <div style={{display:"flex",gap:6,marginTop:6}}>
+                          <button style={{flex:1,background:lc,color:"#000",border:"none",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer",fontFamily:MONO,fontWeight:700}} onClick={()=>submitCard(lane)}>Add</button>
+                          <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAddingLane(null);setNewCardText("");}}>Cancel</button>
+                        </div>
+                      </div>
+                    : <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border2}`,borderRadius:8,padding:"7px",fontSize:11,color:C.dim,cursor:"pointer",fontFamily:MONO,marginTop:2}}
+                        onClick={()=>{setAddingLane(lane);setNewCardText("");}}>+ Add task</button>
+                }>
+                {cards.map(card=>(
+                  <SortableTaskCard key={card.id} card={card} lane={lane} onToggle={onToggleTask} onOpenMenu={(id,ln)=>setMenuCard({id,lane:ln})} />
+                ))}
+              </TaskLane>
+            );
+          })}
+        </div>
+        <DragOverlay dropAnimation={null}>
+          {activeId && cardById[activeId] ? <div style={{width:206}}><TaskCardBody card={cardById[activeId]} lane={findLane(activeId)} dragging /></div> : null}
+        </DragOverlay>
+      </DndContext>
+      <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>Drag the ⠿ handle to reorder a task or move it between lanes (press and hold on mobile). Tap a task for more options. Today tasks show on your Home checklist.</div>
 
       {/* Card action sheet (move / complete / delete) */}
       {menuCard && (() => {
@@ -2714,6 +2810,14 @@ export default function App() {
   function removeTask(cardId) {
     updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.filter(k=>k.id!==cardId) })) }));
   }
+  // Apply a new lane→[cardId] ordering (from drag-and-drop) to the board.
+  function reorderTasks(laneToIds) {
+    updateBoard(b => {
+      const byId = {};
+      b.cols.forEach(c => c.cards.forEach(k => { byId[k.id] = k; }));
+      return { ...b, cols: b.cols.map(c => ({ ...c, cards: (laneToIds[c.name] || []).map(id => byId[id]).filter(Boolean) })) };
+    });
+  }
 
   function updateDiet(d,v){ dietState.setForDate(d, v); }
   function updateActive(d,v){ activityState.setForDate(d, v); }
@@ -2941,7 +3045,7 @@ export default function App() {
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {dietLog[isoDate()]&&<span style={{fontSize:14}}>{DIET_CONFIG[dietLog[isoDate()]].emoji}</span>}
           {activeLog[isoDate()]&&<span style={{fontSize:14}}>{ACTIVE_CONFIG[activeLog[isoDate()]].emoji}</span>}
-          <button onClick={hardRefresh} aria-label="Refresh for the latest version" title="Refresh" style={{background:"transparent",border:"none",color:C.muted,fontSize:17,cursor:"pointer",padding:"2px 4px",lineHeight:1,display:"flex",alignItems:"center"}}>
+          <button onClick={hardRefresh} aria-label="Refresh for the latest version" title="Refresh" style={{background:"transparent",border:"none",color:C.muted,fontSize:23,cursor:"pointer",padding:"2px 4px",lineHeight:1,display:"flex",alignItems:"center"}}>
             <span style={{display:"inline-block",animation:refreshing?"spin 0.7s linear infinite":"none"}}>⟳</span>
           </button>
           <button onClick={()=>setShowSettings(true)} aria-label="Settings" title="Settings" style={{background:"transparent",border:"none",color:C.muted,fontSize:17,cursor:"pointer",padding:"2px 4px",lineHeight:1,display:"flex",alignItems:"center"}}>⚙</button>
@@ -2955,7 +3059,7 @@ export default function App() {
           <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} goals={goalList} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onEditGoals={()=>setShowGoalsEditor(true)}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
-        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask}/>}
+        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks}/>}
       </div>
 
       {/* Rooney floating button */}
