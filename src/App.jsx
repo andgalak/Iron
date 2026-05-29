@@ -452,6 +452,18 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
   const wkActive    = thisWeekDays.filter(d=>activeLog[d]==="green").length;
   const weekFocusMins = focusSessions.filter(s=>thisWeekDays.includes(s.date)).reduce((a,s)=>a+s.mins,0);
 
+  // Weekly goal completion — each goal counts as ONE binary hit (so a 60-min
+  // Zone 2 goal weighs the same as "Chest 1x", not 60 points).
+  const goalProgresses = goalList.map(g => ({ goal: g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises }) }));
+  const goalsHit = goalProgresses.filter(x => x.p.hit).length;
+  const goalsTotal = goalProgresses.length;
+  const weekPct = goalsTotal ? Math.round((goalsHit/goalsTotal)*100) : 0;
+  const weekLabel = goalsTotal===0 ? "Set some goals"
+                  : weekPct===100 ? "Week crushed"
+                  : weekPct>=66 ? "On track"
+                  : weekPct>=33 ? "Getting there"
+                  : "Let's get to work";
+
   // 8-week trends
   const now = new Date();
   const weeks = Array.from({length:8},(_,i)=>{
@@ -497,10 +509,13 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
         </div>
         <div style={{display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:8}}>
           <div style={{fontSize:26,fontWeight:700,color:C.text,fontFamily:MONO,lineHeight:1.1}}>
-            {todayLabel}
-            {todayPerfectCount===3 && <span style={{marginLeft:8,fontSize:22}}>⭐</span>}
+            {weekLabel}
+            {weekPct===100 && goalsTotal>0 && <span style={{marginLeft:8,fontSize:22}}>⭐</span>}
           </div>
-          <div style={{fontSize:28,fontWeight:700,color:todayPerfectCount===3?C.accent:todayPerfectCount>=2?C.green:C.muted,fontFamily:MONO}}>{todayScore}%</div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:28,fontWeight:700,color:weekPct===100?C.accent:weekPct>=66?C.green:C.muted,fontFamily:MONO,lineHeight:1}}>{weekPct}%</div>
+            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.08em",marginTop:2}}>{goalsHit}/{goalsTotal} GOALS</div>
+          </div>
         </div>
       </div>
 
@@ -527,9 +542,9 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
       {(() => {
         const ICONS = { perfect_days:"⭐", zone2:"🫀", diet_green:"🥗", active_green:"👟", diet_red:"🔴", workouts:"🏋", muscle:"💪" };
         const goalColor = (kind) => kind==="perfect_days"?C.accent : kind==="zone2"?C.blue : kind==="diet_red"?C.red : kind==="muscle"?C.accent : C.green;
-        const progresses = goalList.map(g => ({ goal:g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises }) }));
-        const hitCount = progresses.filter(x => x.p.hit).length;
-        const total = progresses.length;
+        const progresses = goalProgresses;
+        const hitCount = goalsHit;
+        const total = goalsTotal;
         return (
           <div style={{background:`linear-gradient(160deg, ${C.card}, ${C.surface})`,border:`1px solid ${C.accent}40`,borderRadius:16,padding:"16px 16px 8px",marginBottom:14,boxShadow:`0 0 30px ${C.accent}12`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
