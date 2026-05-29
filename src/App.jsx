@@ -390,8 +390,10 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], customExercises = {}, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
+function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateDiet, onUpdateActive, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
   const goalList = Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST;
+  const [addingToday, setAddingToday] = useState(false);
+  const [newTodayText, setNewTodayText] = useState("");
   // Simple reference targets derived from the goal list (for trend goal-lines + perfect-day hero)
   const G = {
     perfectDays: 3,
@@ -519,26 +521,56 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
         </div>
       </div>
 
-      {/* 3 pillars */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
-        {[
-          {label:"DIET",    hit:todayDietGreen,   icon: todayDiet?DIET_CONFIG[todayDiet].emoji:"·",     sub: todayDiet?DIET_CONFIG[todayDiet].label:"—",       color: todayDiet?DIET_CONFIG[todayDiet].color:C.dim,                dest:"log"},
-          {label:"ACTIVE",  hit:todayActiveGreen, icon: todayActive?ACTIVE_CONFIG[todayActive].emoji:"·", sub: todayActive?ACTIVE_CONFIG[todayActive].label:"—", color: todayActive?ACTIVE_CONFIG[todayActive].color:C.dim,          dest:"log"},
-          {label:"WORKOUT", hit:todayHasWorkout,  icon: todayHasWorkout?"🟢":"·",                          sub: todayHasWorkout?`${todayWorkouts} done`:"—",       color: todayHasWorkout?C.green:C.dim,                                dest:"iron"},
-        ].map((p,i)=>(
-          <button key={i} onClick={()=>onGoTo(p.dest)} style={{
-            background: p.hit ? p.color+"18" : C.card,
-            border: `1px solid ${p.hit ? p.color : C.border}`,
-            borderRadius:12, padding:"12px 10px", cursor:"pointer", textAlign:"center",
-          }}>
-            <div style={{fontSize:22,marginBottom:4,color:p.color,lineHeight:1}}>{p.icon}</div>
-            <div style={{fontSize:9,color:p.color,fontFamily:MONO,letterSpacing:"0.08em",fontWeight:700}}>{p.label}</div>
-            {p.sub && <div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginTop:2}}>{p.sub}</div>}
-          </button>
+      {/* TODAY — Focus board "Today" lane as a checklist (synced to the board) */}
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:todayTasks.length||addingToday?12:0}}>
+          <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>TODAY</div>
+          <button onClick={()=>{setAddingToday(true);}} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:14,cursor:"pointer",padding:"1px 9px",lineHeight:1.2}}>+</button>
+        </div>
+        {[...todayTasks].sort((a,b)=>(a.done?1:0)-(b.done?1:0)).map(card=>(
+          <div key={card.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
+            <button aria-label="Complete task" onClick={()=>{ if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id); }}
+              style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
+              <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
+                <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
+                {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
+              </svg>
+            </button>
+            <div style={{flex:1,fontSize:13,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
+          </div>
         ))}
+        {addingToday && (
+          <div style={{marginTop:8}}>
+            <input autoFocus value={newTodayText} onChange={e=>setNewTodayText(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&newTodayText.trim()){onAddTask("Today",newTodayText);setNewTodayText("");setAddingToday(false);}if(e.key==="Escape"){setAddingToday(false);setNewTodayText("");}}}
+              placeholder="Add a task for today…"
+              style={{width:"100%",background:"#161616",border:`1px solid ${C.accent}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+        )}
+        {todayTasks.length===0 && !addingToday && (
+          <div style={{fontSize:11,color:C.muted,fontFamily:MONO,lineHeight:1.5,paddingTop:4}}>Nothing for today. Tap + to add, or set up your "Today" lane on the Focus tab.</div>
+        )}
       </div>
 
-      {/* GOALS — the star of the homepage */}
+      {/* Diet & Activity — today only */}
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:12}}>TODAY'S DIET & ACTIVITY</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <div><div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:8}}>DIET</div><TrafficLight config={DIET_CONFIG} value={todayDiet} onChange={v=>onUpdateDiet(today,v)}/></div>
+          <div><div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:8}}>ACTIVITY</div><TrafficLight config={ACTIVE_CONFIG} value={todayActive} onChange={v=>onUpdateActive(today,v)}/></div>
+        </div>
+      </div>
+
+      {/* Workout — compact start link */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        <div>
+          <div style={{fontSize:12,color:C.text,fontFamily:MONO,fontWeight:700}}>Workout</div>
+          <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{todayHasWorkout?`${todayWorkouts} logged today`:"Nothing logged yet"}</div>
+        </div>
+        <button onClick={()=>onGoTo("iron")} style={{background:"transparent",border:`1px solid ${C.accent}`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Start a workout →</button>
+      </div>
+
+      {/* GOALS — core part of the homepage */}
       {(() => {
         const ICONS = { perfect_days:"⭐", zone2:"🫀", diet_green:"🥗", active_green:"👟", diet_red:"🔴", workouts:"🏋", muscle:"💪" };
         const goalColor = (kind) => kind==="perfect_days"?C.accent : kind==="zone2"?C.blue : kind==="diet_red"?C.red : kind==="muscle"?C.accent : C.green;
@@ -584,163 +616,6 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
         );
       })()}
 
-      {/* Week/Month toggle */}
-      <div style={{display:"flex",gap:4,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:4,marginBottom:14}}>
-        {["week","month"].map(m=>(
-          <button key={m} onClick={()=>setViewMode(m)} style={{
-            flex:1, background: viewMode===m ? C.accent : "transparent",
-            color: viewMode===m ? "#000" : C.muted, border:"none", borderRadius:6,
-            padding:"7px 0", fontSize:11, fontWeight:700, cursor:"pointer",
-            fontFamily:MONO, letterSpacing:"0.1em",
-          }}>{m.toUpperCase()}</button>
-        ))}
-      </div>
-
-      {viewMode === "week" ? (
-        <>
-          {/* Week strip */}
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:12}}>
-            <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>THIS WEEK</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:5}}>
-              {thisWeekDays.map((d,i)=>{
-                const labels="MTWTFSS";
-                const diet=dietLog[d]; const active=activeLog[d]; const didWk=wkSet.has(d);
-                const dcfg=diet?DIET_CONFIG[diet]:null;
-                const perfect = isPerfectDay(d, dietLog, activeLog, wkSet);
-                return (
-                  <div key={d} style={{textAlign:"center",position:"relative"}}>
-                    <div style={{fontSize:9,color:d===today?C.accent:C.dim,fontFamily:MONO,marginBottom:3,fontWeight:d===today?700:400}}>{labels[i]}</div>
-                    <div style={{background:dcfg?dcfg.color+"18":"#111",border:`1.5px solid ${perfect?C.accent:dcfg?dcfg.color:C.border}`,borderRadius:8,padding:"5px 0",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minHeight:42,position:"relative",boxShadow:perfect?`0 0 12px ${C.accent}44`:"none"}}>
-                      {perfect && <div style={{position:"absolute",top:-7,right:-3,fontSize:11}}>⭐</div>}
-                      {dcfg ? <span style={{fontSize:12}}>{dcfg.emoji}</span> : <span style={{fontSize:10,color:C.dim}}>·</span>}
-                      {active && <span style={{fontSize:9}}>{ACTIVE_CONFIG[active].emoji}</span>}
-                      {didWk && <span style={{fontSize:9,color:C.accent,lineHeight:1}}>▶</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-        </>
-      ) : (
-        <>
-          {/* Month nav */}
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px"}}>
-            <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={()=>setMonthOffset(o=>o-1)}>‹</button>
-            <span style={{fontSize:12,color:C.text,fontFamily:MONO,fontWeight:700,letterSpacing:"0.05em"}}>{monthData.label}</span>
-            <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:MONO,opacity:monthOffset>=0?0.3:1}} onClick={()=>monthOffset<0&&setMonthOffset(o=>o+1)}>›</button>
-          </div>
-
-          {/* Month calendar */}
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:12,marginBottom:12}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:6}}>
-              {["M","T","W","T","F","S","S"].map((l,i)=>(
-                <div key={i} style={{fontSize:9,color:C.dim,fontFamily:MONO,textAlign:"center",letterSpacing:"0.05em"}}>{l}</div>
-              ))}
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
-              {monthData.cells.map((d,i)=>{
-                if (d === null) return <div key={i} style={{aspectRatio:"1"}}/>;
-                const diet=dietLog[d]; const active=activeLog[d]; const didWk=wkSet.has(d);
-                const dcfg=diet?DIET_CONFIG[diet]:null;
-                const perfect = isPerfectDay(d, dietLog, activeLog, wkSet);
-                const isToday = d===today;
-                const isFuture = d>today;
-                return (
-                  <div key={d} style={{
-                    aspectRatio:"1",
-                    background: perfect ? C.accent+"22" : dcfg ? dcfg.color+"12" : C.bg,
-                    border: `1px solid ${isToday?C.accent: perfect?C.accent:dcfg?dcfg.color:C.border}`,
-                    borderRadius:6, padding:"2px 2px",
-                    display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:0,
-                    opacity: isFuture ? 0.3 : 1,
-                    position:"relative",
-                    boxShadow: perfect ? `0 0 6px ${C.accent}33` : "none",
-                  }}>
-                    <span style={{fontSize:9,color:isToday?C.accent:perfect?C.accent:C.muted,fontFamily:MONO,fontWeight:isToday?700:400,lineHeight:1}}>{new Date(d+"T12:00:00").getDate()}</span>
-                    <div style={{display:"flex",gap:1,marginTop:1,height:10,alignItems:"center"}}>
-                      {dcfg && <span style={{fontSize:7}}>{dcfg.emoji}</span>}
-                      {active && <span style={{fontSize:7}}>{ACTIVE_CONFIG[active].emoji}</span>}
-                      {didWk && <span style={{fontSize:7,color:C.accent,fontWeight:700,lineHeight:1}}>▶</span>}
-                    </div>
-                    {perfect && <div style={{position:"absolute",top:-4,right:-2,fontSize:8}}>⭐</div>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Month totals */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
-            <ScoreCard label="⭐ PERFECT" value={monthData.totals.perfect} color={C.accent}/>
-            <ScoreCard label="WORKOUTS"   value={monthData.totals.workouts} color={C.accent}/>
-            <ScoreCard label="CLEAN DIET" value={monthData.totals.dietGreen} color={C.green}/>
-            <ScoreCard label="ACTIVE 🟢" value={monthData.totals.active} color={C.green}/>
-            <ScoreCard label="FOCUS HRS" value={monthData.totals.focusMins>0?`${Math.round(monthData.totals.focusMins/60*10)/10}h`:"—"} color={C.blue}/>
-            <ScoreCard label="CHEAT DAYS 🔴" value={monthData.totals.dietRed} color={monthData.totals.dietRed>4?C.red:C.text}/>
-          </div>
-        </>
-      )}
-
-      {/* 8-WEEK TRENDS — always visible */}
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>8-WEEK TRENDS</div>
-      {[
-        {label:"⭐ PERFECT DAYS / WEEK", data:weeks.map(w=>w.perfect),  max:7,     color:C.accent, goalLine: G.perfectDays},
-        {label:"WORKOUTS / WEEK",        data:weeks.map(w=>w.workouts), max:maxWk, color:C.accent, goalLine: G.workouts},
-        {label:"CLEAN DIET DAYS",        data:weeks.map(w=>w.dg),       max:7,     color:C.green,  goalLine: G.dietGreen},
-        {label:"ACTIVE DAYS",            data:weeks.map(w=>w.ag),       max:7,     color:C.green,  goalLine: G.activeGreen},
-      ].map(({label,data,max,color,goalLine})=>(
-        <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
-          <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>{label}</div>
-          <MiniChart data={data} max={max} color={color} goalLine={goalLine}/>
-          <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
-            <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>{weeks[0].label}</span>
-            <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>Now</span>
-          </div>
-        </div>
-      ))}
-
-      {/* Focus hours trend */}
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>FOCUS HOURS / WEEK</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:60}}>
-          {weeks.map((w,i)=>{
-            const h=Math.max((w.focusMins/Math.max(maxF,1))*52,w.focusMins>0?4:2);
-            return <div key={i} style={{flex:1,height:h,background:w.focusMins>=120?C.blue:w.focusMins>0?C.border2:C.border,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}}/>;
-          })}
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
-          <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>{weeks[0].label}</span>
-          <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>Now</span>
-        </div>
-      </div>
-
-      {/* Red diet days trend */}
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:14}}>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>CHEAT DAYS / WEEK · max {G.dietRed}</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:40}}>
-          {weeks.map((w,i)=>{
-            const h=Math.max((w.dr/3)*36,w.dr>0?4:2);
-            return <div key={i} style={{flex:1,height:h,background:w.dr===0?C.green:w.dr<=G.dietRed?C.border2:C.red,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}}/>;
-          })}
-        </div>
-      </div>
-
-      {/* Recent workouts */}
-      {history.length>0&&(
-        <>
-          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>RECENT WORKOUTS</div>
-          {history.slice(0,5).map((w,i)=>(
-            <button key={i} onClick={()=>onOpenEdit(i)} style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",marginBottom:6,cursor:"pointer",textAlign:"left",color:"inherit",font:"inherit",display:"block"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><div style={{fontSize:12,color:C.text,fontFamily:MONO,fontWeight:600}}>{w.name}</div><div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{new Date(w.date).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div></div>
-                <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:12,color:C.accent,fontFamily:MONO,fontWeight:700}}>{formatTime(w.elapsed)}</span><span style={{fontSize:13,color:C.dim}}>›</span></div>
-              </div>
-            </button>
-          ))}
-        </>
-      )}
 
       {/* Account + Danger zone */}
       <div style={{marginTop:24,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
@@ -812,10 +687,9 @@ function IronTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, on
     <div style={{padding:"16px 16px 80px"}}>
 
       {/* Stats strip */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
         <ScoreCard label="THIS WEEK" value={`${wkWorkouts}/${WEEKLY_GOALS.workouts}`} color={wkWorkouts>=WEEKLY_GOALS.workouts?C.accent:C.text}/>
         <ScoreCard label="ALL TIME" value={history.length} color={C.text}/>
-        <ScoreCard label="DIET TODAY" value={dietLog[today]?DIET_CONFIG[dietLog[today]].emoji:"—"} color={C.text}/>
       </div>
 
       {/* Start workout */}
@@ -854,30 +728,6 @@ function IronTab({ history, dietLog, activeLog, onUpdateDiet, onUpdateActive, on
         </div>
       ))}
 
-      {/* Diet + Activity quick log */}
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,marginTop:16,fontWeight:700}}>TODAY</div>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:16}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-          <div><div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:8}}>DIET</div><TrafficLight config={DIET_CONFIG} value={dietLog[today]} onChange={v=>onUpdateDiet(today,v)}/></div>
-          <div><div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:8}}>ACTIVITY</div><TrafficLight config={ACTIVE_CONFIG} value={activeLog[today]} onChange={v=>onUpdateActive(today,v)}/></div>
-        </div>
-      </div>
-
-      {/* Recent */}
-      {history.length>0&&(
-        <>
-          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>RECENT WORKOUTS</div>
-          {history.slice(0,5).map((w,i)=>(
-            <button key={i} onClick={()=>onOpenEdit(i)} style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:8,cursor:"pointer",textAlign:"left",color:"inherit",font:"inherit",display:"block"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <div><div style={{fontSize:13,fontWeight:600,color:C.text,fontFamily:MONO}}>{w.name}</div><div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginTop:2}}>{dayLabel(w.date)}</div></div>
-                <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:13,color:C.accent,fontFamily:MONO,fontWeight:700}}>{formatElapsed(w.elapsed)}</span><span style={{fontSize:14,color:C.dim}}>›</span></div>
-              </div>
-              <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6}}>{compSets(w.exercises)} sets · {totalVol(w.exercises).toLocaleString()} lbs</div>
-            </button>
-          ))}
-        </>
-      )}
     </div>
   );
 }
@@ -954,20 +804,18 @@ function CoffeeMug({ fillPct, running, timeText }) {
 }
 
 // ─── FOCUS TAB ────────────────────────────────────────────────────────────────
-function FocusTab({ focusSessions, onAddSession, boards, setBoards }) {
+function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask, onMoveTask, onRemoveTask }) {
   const today = isoDate();
   const [timerMins, setTimerMins] = useState(90);
   const [timerInput, setTimerInput] = useState("90");
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [sessionLabel, setSessionLabel] = useState("");
-  const [activeBoard, setActiveBoard] = useState(boards[0]?.id||null);
-  const [addingCard, setAddingCard] = useState(null); // colId
+  const [addingLane, setAddingLane] = useState(null); // lane name being added to
   const [newCardText, setNewCardText] = useState("");
-  const [addingCol, setAddingCol] = useState(false);
-  const [newColName, setNewColName] = useState("");
-  const [dragging, setDragging] = useState(null); // {boardId, colId, cardId}
-  const [dragOver, setDragOver] = useState(null); // colId
+  const [menuCard, setMenuCard] = useState(null); // { id, lane } for the move/action sheet
+  const [dragging, setDragging] = useState(null); // { cardId, lane } (desktop drag)
+  const [dragOver, setDragOver] = useState(null); // lane name
   const timerRef = useRef(null);
   const totalSecs = timerMins * 60;
   const remaining = Math.max(totalSecs - elapsed, 0);
@@ -990,32 +838,18 @@ function FocusTab({ focusSessions, onAddSession, boards, setBoards }) {
   const todayMins = focusSessions.filter(s=>s.date===today).reduce((a,s)=>a+s.mins,0);
   const weekMins  = focusSessions.filter(s=>getWeekDays(0).includes(s.date)).reduce((a,s)=>a+s.mins,0);
 
-  const board = boards.find(b=>b.id===activeBoard);
-
-  function addCard(colId){
-    if(!newCardText.trim()) return;
-    setBoards(bs=>bs.map(b=>b.id===activeBoard?{...b,cols:b.cols.map(c=>c.id===colId?{...c,cards:[...c.cards,{id:uid(),text:newCardText.trim(),tags:[]}]}:c)}:b));
-    setNewCardText(""); setAddingCard(null);
+  const LANES = ["Today", "In Progress", "Keep in Mind"];
+  const laneColor = { "Today": C.accent, "In Progress": C.blue, "Keep in Mind": C.muted };
+  function cardsForLane(name) {
+    const col = board?.cols?.find(c => c.name === name);
+    if (!col) return [];
+    // Completed cards sink to the bottom (only Today lane tracks completion)
+    return [...col.cards].sort((a,b) => (a.done?1:0) - (b.done?1:0));
   }
-  function removeCard(colId,cardId){
-    setBoards(bs=>bs.map(b=>b.id===activeBoard?{...b,cols:b.cols.map(c=>c.id===colId?{...c,cards:c.cards.filter(k=>k.id!==cardId)}:c)}:b));
-  }
-  function addCol(){
-    if(!newColName.trim()) return;
-    setBoards(bs=>bs.map(b=>b.id===activeBoard?{...b,cols:[...b.cols,{id:uid(),name:newColName.trim(),cards:[]}]}:b));
-    setNewColName(""); setAddingCol(false);
-  }
-  function moveCard(fromColId,cardId,toColId){
-    if(fromColId===toColId) return;
-    let card;
-    setBoards(bs=>bs.map(b=>{
-      if(b.id!==activeBoard) return b;
-      const cols=b.cols.map(c=>{
-        if(c.id===fromColId){ card=c.cards.find(k=>k.id===cardId); return{...c,cards:c.cards.filter(k=>k.id!==cardId)}; }
-        return c;
-      });
-      return{...b,cols:cols.map(c=>c.id===toColId&&card?{...c,cards:[...c.cards,card]}:c)};
-    }));
+  function submitCard(laneName) {
+    if (!newCardText.trim()) return;
+    onAddTask(laneName, newCardText);
+    setNewCardText(""); setAddingLane(null);
   }
 
   // Coffee mug fill: 1 = full, 0 = empty
@@ -1086,71 +920,82 @@ function FocusTab({ focusSessions, onAddSession, boards, setBoards }) {
         </div>
       )}
 
-      {/* Board selector */}
-      <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:4}}>
-        {boards.map(b=>(
-          <button key={b.id} style={{flexShrink:0,background:activeBoard===b.id?b.color+"22":"#161616",border:`1px solid ${activeBoard===b.id?b.color:C.border}`,borderRadius:20,padding:"5px 14px",fontSize:11,color:activeBoard===b.id?b.color:C.muted,cursor:"pointer",fontFamily:MONO,whiteSpace:"nowrap"}}
-            onClick={()=>setActiveBoard(b.id)}>{b.name}</button>
-        ))}
-        <button style={{flexShrink:0,background:"#161616",border:`1px dashed ${C.border2}`,borderRadius:20,padding:"5px 14px",fontSize:11,color:C.dim,cursor:"pointer",fontFamily:MONO}}
-          onClick={()=>{ const name=prompt("Board name?"); if(name){const colors=[C.purple,C.blue,C.green,C.yellow]; const nb={id:uid(),name,color:colors[boards.length%colors.length],cols:[{id:uid(),name:"Todo",cards:[]},{id:uid(),name:"In Progress",cards:[]},{id:uid(),name:"Done",cards:[]}]}; setBoards(bs=>[...bs,nb]); setActiveBoard(nb.id); }}}>+ Board</button>
-      </div>
-
-      {/* Kanban */}
-      {board&&(
-        <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:8}}>
-          {board.cols.map(col=>(
-            <div key={col.id} style={{flexShrink:0,width:220,background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:12,outline:dragOver===col.id?`2px solid ${board.color}`:undefined}}
-              onDragOver={e=>{e.preventDefault();setDragOver(col.id);}}
-              onDrop={e=>{ if(dragging&&dragging.colId!==col.id){moveCard(dragging.colId,dragging.cardId,col.id);} setDragging(null);setDragOver(null); }}>
+      {/* Single board — 3 fixed lanes */}
+      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:10,fontWeight:700}}>TASKS</div>
+      <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:8}}>
+        {LANES.map(lane=>{
+          const lc = laneColor[lane];
+          const cards = cardsForLane(lane);
+          return (
+            <div key={lane} style={{flexShrink:0,width:230,background:C.card,border:`1px solid ${dragOver===lane?lc:C.border}`,borderRadius:12,padding:12}}
+              onDragOver={e=>{e.preventDefault();setDragOver(lane);}}
+              onDrop={e=>{ if(dragging&&dragging.lane!==lane){onMoveTask(dragging.cardId,lane);} setDragging(null);setDragOver(null); }}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{fontSize:11,fontWeight:700,color:C.sub,fontFamily:MONO,letterSpacing:"0.08em"}}>{col.name.toUpperCase()}</div>
-                <span style={{fontSize:11,color:C.dim,fontFamily:MONO}}>{col.cards.length}</span>
+                <div style={{fontSize:11,fontWeight:700,color:lc,fontFamily:MONO,letterSpacing:"0.06em"}}>{lane.toUpperCase()}</div>
+                <span style={{fontSize:11,color:C.dim,fontFamily:MONO}}>{cards.length}</span>
               </div>
-              {col.cards.map(card=>(
+              {cards.map(card=>(
                 <div key={card.id} draggable
-                  onDragStart={()=>setDragging({boardId:board.id,colId:col.id,cardId:card.id})}
-                  style={{background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,padding:"10px 10px",marginBottom:6,cursor:"grab",position:"relative"}}>
-                  <div style={{fontSize:12,color:C.text,fontFamily:MONO,lineHeight:1.5,paddingRight:16}}>{card.text}</div>
-                  {card.tags?.length>0&&(
-                    <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>
-                      {card.tags.map(t=><span key={t} style={{fontSize:9,color:board.color,background:board.color+"18",padding:"2px 6px",borderRadius:4,fontFamily:MONO}}>{t}</span>)}
-                    </div>
+                  onDragStart={()=>setDragging({cardId:card.id,lane})}
+                  onClick={()=>setMenuCard({id:card.id, lane})}
+                  style={{background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,padding:"10px",marginBottom:6,cursor:"pointer",display:"flex",alignItems:"flex-start",gap:8}}>
+                  {lane==="Today" && (
+                    <button aria-label="Complete task" onClick={e=>{e.stopPropagation(); if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id);}}
+                      style={{flexShrink:0,width:22,height:22,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" style={{display:"block"}}>
+                        <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
+                        {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
+                      </svg>
+                    </button>
                   )}
-                  <button style={{position:"absolute",top:6,right:6,background:"transparent",border:"none",color:C.dim,fontSize:11,cursor:"pointer",lineHeight:1}} onClick={()=>removeCard(col.id,card.id)}>✕</button>
+                  <div style={{flex:1,fontSize:12,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
                 </div>
               ))}
-              {addingCard===col.id
+              {addingLane===lane
                 ? <div>
-                    <textarea style={{width:"100%",background:"#1a1a1a",border:`1px solid ${board.color}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",resize:"none",boxSizing:"border-box",minHeight:64}}
+                    <textarea style={{width:"100%",background:"#1a1a1a",border:`1px solid ${lc}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",resize:"none",boxSizing:"border-box",minHeight:56}}
                       autoFocus value={newCardText} onChange={e=>setNewCardText(e.target.value)}
-                      onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();addCard(col.id);}if(e.key==="Escape")setAddingCard(null);}}
-                      placeholder="Card text…"/>
+                      onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submitCard(lane);}if(e.key==="Escape"){setAddingLane(null);setNewCardText("");}}}
+                      placeholder="Task…"/>
                     <div style={{display:"flex",gap:6,marginTop:6}}>
-                      <button style={{flex:1,background:board.color,color:"#000",border:"none",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer",fontFamily:MONO,fontWeight:700}} onClick={()=>addCard(col.id)}>Add</button>
-                      <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>setAddingCard(null)}>Cancel</button>
+                      <button style={{flex:1,background:lc,color:"#000",border:"none",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer",fontFamily:MONO,fontWeight:700}} onClick={()=>submitCard(lane)}>Add</button>
+                      <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAddingLane(null);setNewCardText("");}}>Cancel</button>
                     </div>
                   </div>
                 : <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border2}`,borderRadius:8,padding:"7px",fontSize:11,color:C.dim,cursor:"pointer",fontFamily:MONO,marginTop:2}}
-                    onClick={()=>setAddingCard(col.id)}>+ Add card</button>
+                    onClick={()=>{setAddingLane(lane);setNewCardText("");}}>+ Add task</button>
               }
             </div>
-          ))}
-          {addingCol
-            ? <div style={{flexShrink:0,width:220}}>
-                <input style={{width:"100%",background:C.card,border:`1px solid ${board.color}`,borderRadius:10,color:C.text,padding:"10px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:6}}
-                  autoFocus placeholder="Column name…" value={newColName} onChange={e=>setNewColName(e.target.value)}
-                  onKeyDown={e=>{if(e.key==="Enter")addCol();if(e.key==="Escape")setAddingCol(false);}}/>
-                <div style={{display:"flex",gap:6}}>
-                  <button style={{flex:1,background:board.color,color:"#000",border:"none",borderRadius:6,padding:"8px",fontSize:12,cursor:"pointer",fontFamily:MONO,fontWeight:700}} onClick={addCol}>Add</button>
-                  <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"8px",fontSize:12,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>setAddingCol(false)}>Cancel</button>
-                </div>
+          );
+        })}
+      </div>
+      <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>Tap a task to move it between lanes, complete, or delete. Today tasks show on your Home checklist.</div>
+
+      {/* Card action sheet (move / complete / delete) */}
+      {menuCard && (() => {
+        const card = board?.cols?.flatMap(c=>c.cards).find(k=>k.id===menuCard.id);
+        if (!card) { return null; }
+        return (
+          <div onClick={()=>setMenuCard(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:160,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:480,background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"18px 18px 0 0",padding:"16px 16px calc(20px + env(safe-area-inset-bottom))"}}>
+              <div style={{fontSize:13,color:C.text,fontFamily:MONO,lineHeight:1.5,marginBottom:14,paddingBottom:12,borderBottom:`1px solid ${C.border}`}}>{card.text}</div>
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>MOVE TO</div>
+              {LANES.map(lane=>(
+                <button key={lane} disabled={lane===menuCard.lane} onClick={()=>{onMoveTask(menuCard.id,lane);setMenuCard(null);}}
+                  style={{width:"100%",textAlign:"left",background:lane===menuCard.lane?"#161616":"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:lane===menuCard.lane?C.dim:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,cursor:lane===menuCard.lane?"default":"pointer",marginBottom:6}}>
+                  {lane}{lane===menuCard.lane?"  (current)":""}
+                </button>
+              ))}
+              <div style={{display:"flex",gap:8,marginTop:8}}>
+                {menuCard.lane==="Today" && (
+                  <button onClick={()=>{onToggleTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>{card.done?"Mark not done":"Complete"}</button>
+                )}
+                <button onClick={()=>{onRemoveTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>Delete</button>
               </div>
-            : <button style={{flexShrink:0,width:44,background:C.card,border:`1px dashed ${C.border}`,borderRadius:12,color:C.dim,fontSize:20,cursor:"pointer",alignSelf:"flex-start",padding:"10px 0"}}
-                onClick={()=>setAddingCol(true)}>+</button>
-          }
-        </div>
-      )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2593,6 +2438,28 @@ export default function App() {
   const setBoards = boardsState.setAll;
   const addCustomExercise = (name, muscle, cat) => customExState.add(name, muscle, cat);
 
+  // Single task board (Today / In Progress / Keep in Mind) — Home + Focus share this
+  const board = boards[0] || null;
+  const todayTasks = board?.cols?.find(c => c.name === "Today")?.cards || [];
+  function updateBoard(mutator) { setBoards(bs => bs.map((b,i) => i===0 ? mutator(b) : b)); }
+  function addTask(laneName, text) {
+    if (!text.trim() || !board) return;
+    updateBoard(b => ({ ...b, cols: b.cols.map(c => c.name===laneName ? { ...c, cards: [...c.cards, { id: uid(), text: text.trim(), tags: [], done: false }] } : c) }));
+  }
+  function toggleTask(cardId) {
+    updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.map(k => k.id===cardId ? { ...k, done: !k.done } : k) })) }));
+  }
+  function moveTask(cardId, toLaneName) {
+    let moved = null;
+    updateBoard(b => {
+      const cols = b.cols.map(c => { const f = c.cards.find(k=>k.id===cardId); if (f) moved = f; return { ...c, cards: c.cards.filter(k=>k.id!==cardId) }; });
+      return { ...b, cols: cols.map(c => c.name===toLaneName && moved ? { ...c, cards: [...c.cards, moved] } : c) };
+    });
+  }
+  function removeTask(cardId) {
+    updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.filter(k=>k.id!==cardId) })) }));
+  }
+
   function updateDiet(d,v){ dietState.setForDate(d, v); }
   function updateActive(d,v){ activityState.setForDate(d, v); }
   function addSession(s){ focusState.add(s); }
@@ -2801,7 +2668,6 @@ export default function App() {
     { key:"home",  icon:"🏠",  label:"Home"  },
     { key:"iron",  icon:"🏋",  label:"Iron"  },
     { key:"focus", icon:"⬡",  label:"Focus" },
-    { key:"log",   icon:"✎",  label:"Log"   },
   ];
 
   return (
@@ -2824,10 +2690,12 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} customExercises={customExercises} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
-        {tab==="iron"  && <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout}/>}
-        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} boards={boards} setBoards={setBoards}/>}
-        {tab==="log"   && <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
+        {tab==="iron"  && <>
+          <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout}/>
+          <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
+        </>}
+        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask}/>}
       </div>
 
       {/* Rooney floating button */}

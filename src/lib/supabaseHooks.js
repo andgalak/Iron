@@ -199,18 +199,52 @@ export function useFocusSessions(userId) {
 // ─── BOARDS ───────────────────────────────────────────────────────────────────
 // Boards are mutated with the full setBoards(updater) pattern. The hook diffs
 // the previous vs next array and persists each changed board.
+const LANES = ["Today", "In Progress", "Keep in Mind"];
+function mapColToLane(name) {
+  const n = (name || "").toLowerCase();
+  if (n.includes("progress")) return "In Progress";
+  if (n.includes("done") || n.includes("today")) return "Today";
+  return "Keep in Mind"; // Backlog, Todo, etc.
+}
+
 export function useBoards(userId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("boards").select("*").eq("user_id", userId).order("position", { ascending: true })
-      .then(({ data, error }) => {
-        if (error) console.error("boards load:", error);
-        setData(data || []);
-        setLoading(false);
-      });
+    (async () => {
+      const { data: boards, error } = await supabase.from("boards").select("*").eq("user_id", userId).order("position", { ascending: true });
+      if (error) console.error("boards load:", error);
+      let list = boards || [];
+
+      // One-time migration to a single board with 3 fixed lanes.
+      const isSingle = list.length === 1 && Array.isArray(list[0].cols) && list[0].cols.length === 3 && list[0].cols.every((c, i) => c.name === LANES[i]);
+      if (!isSingle) {
+        const laneCards = { "Today": [], "In Progress": [], "Keep in Mind": [] };
+        for (const b of list) {
+          for (const col of (b.cols || [])) {
+            const lane = mapColToLane(col.name);
+            const doneFromColumn = (col.name || "").toLowerCase().includes("done");
+            for (const card of (col.cards || [])) {
+              laneCards[lane].push({ ...card, done: card.done ?? (lane === "Today" && doneFromColumn) });
+            }
+          }
+        }
+        const newBoard = {
+          user_id: userId, name: "Tasks", color: "#FF6B35", position: 0,
+          cols: LANES.map((name, i) => ({ id: "lane" + i, name, cards: laneCards[name] })),
+        };
+        try {
+          await supabase.from("boards").delete().eq("user_id", userId);
+          const { data: inserted } = await supabase.from("boards").insert(newBoard).select().single();
+          list = inserted ? [inserted] : [{ ...newBoard, id: "local" }];
+        } catch (e) { console.error("board migration:", e); list = [{ ...newBoard, id: "local" }]; }
+      }
+
+      setData(list);
+      setLoading(false);
+    })();
   }, [userId]);
 
   // Compatible with setBoards(bs => ...) callsites.
