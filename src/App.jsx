@@ -28,17 +28,23 @@ const C = {
 const MONO = "'DM Mono','Courier New',monospace";
 
 // Orange barbell logo mark (matches the app icon)
-function BarbellMark({ size = 22, color = "#FF6B35" }) {
+function BarbellMark({ size = 26 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 512 512" style={{ display: "block", flexShrink: 0 }}>
-      <g fill={color}>
-        <rect x="150" y="244" width="212" height="24" rx="8"/>
-        <rect x="120" y="200" width="32" height="112" rx="10"/>
-        <rect x="86"  y="222" width="26" height="68"  rx="9"/>
-        <rect x="68"  y="238" width="14" height="36"  rx="6"/>
-        <rect x="360" y="200" width="32" height="112" rx="10"/>
-        <rect x="400" y="222" width="26" height="68"  rx="9"/>
-        <rect x="430" y="238" width="14" height="36"  rx="6"/>
+      <defs>
+        <linearGradient id="bbMark" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#FF8A4C"/>
+          <stop offset="100%" stopColor="#F5571E"/>
+        </linearGradient>
+      </defs>
+      <g fill="url(#bbMark)">
+        <rect x="138" y="236" width="236" height="40" rx="14"/>
+        <rect x="100" y="146" width="50" height="220" rx="18"/>
+        <rect x="58"  y="186" width="38" height="140" rx="14"/>
+        <rect x="38"  y="224" width="18" height="64"  rx="8"/>
+        <rect x="362" y="146" width="50" height="220" rx="18"/>
+        <rect x="416" y="186" width="38" height="140" rx="14"/>
+        <rect x="456" y="224" width="18" height="64"  rx="8"/>
       </g>
     </svg>
   );
@@ -2359,7 +2365,7 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
   return (
     <CenteredCard>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
-        <BarbellMark size={26}/>
+        <BarbellMark size={32}/>
         <span style={{fontSize:20,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
       </div>
 
@@ -2772,7 +2778,7 @@ export default function App() {
       {/* Top bar */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 18px 0",paddingTop:"calc(18px + env(safe-area-inset-top))"}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <BarbellMark size={22}/>
+          <BarbellMark size={28}/>
           <span style={{fontSize:18,fontWeight:700,letterSpacing:"0.2em",color:"#fff",fontFamily:MONO}}>IRON</span>
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
