@@ -402,22 +402,6 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
     activeGreen: goalList.find(g=>g.kind==="active_green")?.target ?? 4,
     dietRed:     goalList.find(g=>g.kind==="diet_red")?.target ?? 1,
   };
-  const [showPwForm, setShowPwForm] = useState(false);
-  const [newPw, setNewPw] = useState("");
-  const [pwBusy, setPwBusy] = useState(false);
-  const [pwMsg, setPwMsg] = useState(null);
-  async function savePassword(){
-    if (!newPw || newPw.length < 6 || pwBusy || !onUpdatePassword) return;
-    setPwBusy(true); setPwMsg(null);
-    const { error } = await onUpdatePassword(newPw);
-    setPwBusy(false);
-    if (error) setPwMsg({ kind:"err", text: error.message || "Couldn't update password." });
-    else {
-      setPwMsg({ kind:"ok", text: "Password saved. Use it to sign in next time." });
-      setNewPw(""); setShowPwForm(false);
-      setTimeout(()=>setPwMsg(null), 4000);
-    }
-  }
   const today = isoDate();
   const [viewMode, setViewMode] = useState("week"); // "week" | "month"
   const [monthOffset, setMonthOffset] = useState(0);
@@ -614,43 +598,6 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
           <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{todayHasWorkout?`${todayWorkouts} logged today`:"Nothing logged yet"}</div>
         </div>
         <button onClick={()=>onGoTo("iron")} style={{background:"transparent",border:`1px solid ${C.accent}`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Start a workout →</button>
-      </div>
-
-      {/* Account + Danger zone */}
-      <div style={{marginTop:24,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
-        {userEmail && (
-          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,marginBottom:10,letterSpacing:"0.05em"}}>
-            Signed in as <span style={{color:C.muted}}>{userEmail}</span>
-          </div>
-        )}
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
-          {onUpdatePassword && (
-            <button style={{background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
-              onClick={()=>{setShowPwForm(s=>!s); setPwMsg(null);}}>
-              {showPwForm ? "Cancel" : "Set / change password"}
-            </button>
-          )}
-          {onSignOut && (
-            <button style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
-              onClick={onSignOut}>Sign out</button>
-          )}
-          <button style={{background:"transparent",border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,padding:"8px 14px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
-            onClick={onClearAll}>Clear all data</button>
-        </div>
-        {showPwForm && (
-          <div style={{background:C.card,border:`1px solid ${C.accent}55`,borderRadius:10,padding:12,marginBottom:8}}>
-            <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:8}}>Pick a password (min 6 chars). Browser will offer to save it for autofill.</div>
-            <input type="password" autoComplete="new-password" value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="new password" minLength={6}
-              style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
-            <button onClick={savePassword} disabled={newPw.length<6||pwBusy}
-              style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,cursor:newPw.length>=6&&!pwBusy?"pointer":"default",fontFamily:MONO,opacity:newPw.length>=6&&!pwBusy?1:0.4}}>
-              {pwBusy ? "Saving..." : "Save password"}
-            </button>
-          </div>
-        )}
-        {pwMsg && (
-          <div style={{fontSize:10,color:pwMsg.kind==="ok"?C.green:C.red,fontFamily:MONO,marginBottom:8}}>{pwMsg.text}</div>
-        )}
       </div>
 
     </div>
@@ -2371,6 +2318,70 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
   );
 }
 
+// ─── SETTINGS SHEET ───────────────────────────────────────────────────────────
+function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, onSignOut, onClearAll, onClose }) {
+  const [showPwForm, setShowPwForm] = useState(false);
+  const [newPw, setNewPw] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState(null);
+  async function savePassword(){
+    if (!newPw || newPw.length < 6 || pwBusy || !onUpdatePassword) return;
+    setPwBusy(true); setPwMsg(null);
+    const { error } = await onUpdatePassword(newPw);
+    setPwBusy(false);
+    if (error) setPwMsg({ kind:"err", text: error.message || "Couldn't update password." });
+    else { setPwMsg({ kind:"ok", text: "Password saved. Use it to sign in next time." }); setNewPw(""); setShowPwForm(false); setTimeout(()=>setPwMsg(null), 4000); }
+  }
+  const kindLabel = { perfect_days:"Perfect days", muscle:"Muscle group", zone2:"Zone 2", diet_green:"Clean diet", active_green:"Active", diet_red:"Cheat days", workouts:"Workouts" };
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:170,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:480,maxHeight:"90vh",background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"20px 20px 0 0",display:"flex",flexDirection:"column",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",paddingTop:"calc(16px + env(safe-area-inset-top))",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#0d0d0d"}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,letterSpacing:"0.05em"}}>Settings</div>
+          <button style={{background:"transparent",border:"none",color:C.muted,fontSize:18,cursor:"pointer"}} onClick={onClose}>✕</button>
+        </div>
+
+        <div style={{padding:"16px 16px calc(24px + env(safe-area-inset-bottom))"}}>
+          {/* Your Goals */}
+          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:10,fontWeight:700}}>YOUR GOALS</div>
+          <div style={{marginBottom:8}}>
+            {goals.length===0 ? (
+              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,padding:"4px 0 10px"}}>No goals yet.</div>
+            ) : goals.map(g=>(
+              <div key={g.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",marginBottom:6}}>
+                <span style={{fontSize:13,color:C.text,fontFamily:MONO}}>{g.label || g.group || g.kind}</span>
+                <span style={{fontSize:10,color:C.muted,fontFamily:MONO}}>{kindLabel[g.kind]||g.kind} · {g.kind==="zone2"?`${g.target}min`:`${g.target}${g.kind==="diet_red"?" max":"x"}`}/wk</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={()=>{onClose();onEditGoals();}} style={{width:"100%",background:"transparent",border:`1px solid ${C.accent}`,borderRadius:10,color:C.accent,padding:"11px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO,marginBottom:22}}>Manage goals</button>
+
+          {/* Account */}
+          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:10,fontWeight:700}}>ACCOUNT</div>
+          {userEmail && <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginBottom:10}}>Signed in as <span style={{color:C.text}}>{userEmail}</span></div>}
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+            {onUpdatePassword && <button onClick={()=>{setShowPwForm(s=>!s);setPwMsg(null);}} style={{background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>{showPwForm?"Cancel":"Set / change password"}</button>}
+            {onSignOut && <button onClick={onSignOut} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Sign out</button>}
+          </div>
+          {showPwForm && (
+            <div style={{background:C.card,border:`1px solid ${C.accent}55`,borderRadius:10,padding:12,marginBottom:10}}>
+              <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:8}}>Pick a password (min 6 chars).</div>
+              <input type="password" autoComplete="new-password" value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="new password" minLength={6}
+                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:8}}/>
+              <button onClick={savePassword} disabled={newPw.length<6||pwBusy} style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px 14px",fontSize:11,fontWeight:700,cursor:newPw.length>=6&&!pwBusy?"pointer":"default",fontFamily:MONO,opacity:newPw.length>=6&&!pwBusy?1:0.4}}>{pwBusy?"Saving...":"Save password"}</button>
+            </div>
+          )}
+          {pwMsg && <div style={{fontSize:10,color:pwMsg.kind==="ok"?C.green:C.red,fontFamily:MONO,marginBottom:10}}>{pwMsg.text}</div>}
+
+          {/* Data */}
+          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",margin:"22px 0 10px",fontWeight:700}}>DATA</div>
+          <button onClick={onClearAll} style={{background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Clear all data</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   // === Hooks (all called unconditionally — React rules) ===
   const auth = useAuth();
@@ -2395,6 +2406,7 @@ export default function App() {
   const [showRooney, setShowRooney] = useState(false);
   const [showGoalsEditor, setShowGoalsEditor] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   async function hardRefresh() {
     setRefreshing(true);
     try {
@@ -2684,6 +2696,7 @@ export default function App() {
           <button onClick={hardRefresh} aria-label="Refresh for the latest version" title="Refresh" style={{background:"transparent",border:"none",color:C.muted,fontSize:17,cursor:"pointer",padding:"2px 4px",lineHeight:1,display:"flex",alignItems:"center"}}>
             <span style={{display:"inline-block",animation:refreshing?"spin 0.7s linear infinite":"none"}}>⟳</span>
           </button>
+          <button onClick={()=>setShowSettings(true)} aria-label="Settings" title="Settings" style={{background:"transparent",border:"none",color:C.muted,fontSize:17,cursor:"pointer",padding:"2px 4px",lineHeight:1,display:"flex",alignItems:"center"}}>⚙</button>
         </div>
       </div>
 
@@ -2735,6 +2748,18 @@ export default function App() {
           onSave={(g) => { setGoalList(g); setShowGoalsEditor(false); }}
           onClose={() => setShowGoalsEditor(false)}
           onReset={() => { setGoalList(DEFAULT_GOAL_LIST); setShowGoalsEditor(false); }}
+        />
+      )}
+
+      {showSettings && (
+        <SettingsSheet
+          userEmail={auth.user?.email}
+          goals={goalList}
+          onEditGoals={()=>setShowGoalsEditor(true)}
+          onUpdatePassword={auth.updatePassword}
+          onSignOut={auth.signOut}
+          onClearAll={clearAll}
+          onClose={()=>setShowSettings(false)}
         />
       )}
 
