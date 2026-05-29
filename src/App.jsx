@@ -504,7 +504,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
         {[
           {label:"DIET",    hit:todayDietGreen,   icon: todayDiet?DIET_CONFIG[todayDiet].emoji:"·",     sub: todayDiet?DIET_CONFIG[todayDiet].label:"—",       color: todayDiet?DIET_CONFIG[todayDiet].color:C.dim,                dest:"log"},
           {label:"ACTIVE",  hit:todayActiveGreen, icon: todayActive?ACTIVE_CONFIG[todayActive].emoji:"·", sub: todayActive?ACTIVE_CONFIG[todayActive].label:"—", color: todayActive?ACTIVE_CONFIG[todayActive].color:C.dim,          dest:"log"},
-          {label:"WORKOUT", hit:todayHasWorkout,  icon: todayHasWorkout?"✓":"·",                          sub: todayHasWorkout?`${todayWorkouts} done`:"—",       color: todayHasWorkout?C.accent:C.dim,                                dest:"iron"},
+          {label:"WORKOUT", hit:todayHasWorkout,  icon: todayHasWorkout?"🟢":"·",                          sub: todayHasWorkout?`${todayWorkouts} done`:"—",       color: todayHasWorkout?C.green:C.dim,                                dest:"iron"},
         ].map((p,i)=>(
           <button key={i} onClick={()=>onGoTo(p.dest)} style={{
             background: p.hit ? p.color+"18" : C.card,
