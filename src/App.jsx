@@ -513,7 +513,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
             {weekPct===100 && goalsTotal>0 && <span style={{marginLeft:8,fontSize:22}}>⭐</span>}
           </div>
           <div style={{textAlign:"right"}}>
-            <div style={{fontSize:28,fontWeight:700,color:weekPct===100?C.accent:weekPct>=66?C.green:C.muted,fontFamily:MONO,lineHeight:1}}>{weekPct}%</div>
+            <div style={{fontSize:28,fontWeight:700,color:weekPct===100?C.green:weekPct>0?C.accent:C.muted,fontFamily:MONO,lineHeight:1}}>{weekPct}%</div>
             <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.08em",marginTop:2}}>{goalsHit}/{goalsTotal} GOALS</div>
           </div>
         </div>
@@ -550,14 +550,17 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
               <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>THIS WEEK'S GOALS</div>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:(total>0&&hitCount===total)?C.accent:C.sub}}>{hitCount}/{total} hit</span>
+                <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:(total>0&&hitCount===total)?C.green:C.sub}}>{hitCount}/{total} hit</span>
                 {onEditGoals && <button onClick={onEditGoals} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO,padding:"4px 9px"}}>Edit</button>}
               </div>
             </div>
             {total === 0 ? (
               <div style={{fontSize:11,color:C.muted,fontFamily:MONO,textAlign:"center",padding:"10px 0 16px"}}>No goals yet. Tap Edit to add some.</div>
             ) : progresses.map(({goal, p}) => {
-              const color = goalColor(goal.kind);
+              // Completed goals read green ("done"); in-progress shows the theme color
+              // (orange for workout/muscle, blue for Zone 2, red when over a max cap).
+              const inProgress = goal.kind==="zone2" ? C.blue : goal.kind==="diet_red" ? C.red : (goal.kind==="muscle"||goal.kind==="workouts") ? C.accent : C.green;
+              const color = p.hit ? C.green : inProgress;
               const pct = Math.min(p.got/Math.max(p.target,1),1)*100;
               const tgt = p.type==="max" ? `≤${p.target}${p.unit}` : `${p.target}${p.unit}`;
               const over = p.type==="max" && p.got > p.target;
