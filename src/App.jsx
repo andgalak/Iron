@@ -229,7 +229,13 @@ const DEFAULT_BOARDS = [
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
 function uid() { return Math.random().toString(36).slice(2,9); }
-function isoDate(d=new Date()) { return d.toISOString().slice(0,10); }
+function isoDate(d=new Date()) {
+  // LOCAL calendar date (YYYY-MM-DD), not UTC. Using UTC made "today" roll over
+  // in the evening for non-UTC time zones, so workouts/diet logged this evening
+  // got bucketed under tomorrow. Shift by the timezone offset before slicing.
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
 function e1RM(w, r) { if (!w || !r) return 0; return Math.round(w * (1 + r/30)); }
 function formatDuration(sec) { if (!sec || sec < 60) return `${sec||0}s`; return `${Math.round(sec/60)} min`; }
 function bestRMByExercise(history, excludeId=null) {
