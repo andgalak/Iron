@@ -3,7 +3,7 @@ import { supabase, supabaseConfigured } from "./lib/supabase";
 import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
   useFocusSessions, useBoards, useCustomExercises, useRooneyMemories,
-  useZone2Log, useSettings, useRooneyConversation, migrateLocalStorage,
+  useZone2Log, useSettings, useRooneyConversation, useGoalLogs, migrateLocalStorage,
 } from "./lib/supabaseHooks";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -69,8 +69,10 @@ const MUSCLE_GROUPS = {
   "Full Body": ["Full Body"],
 };
 
-// Goal "kinds": muscle (Nx/week sessions), zone2 (minutes/week),
-// diet_green / active_green (days/week), diet_red (max days/week), workouts (days/week).
+// Goal "kinds". Each maps to a data SOURCE and a comparison direction (type:
+//   "min" = hit when got>=target, "max" = hit when got<=target).
+//   muscle/workouts -> read workout history;  zone2 -> read zone2_log;
+//   diet_*/active_* -> read diet/activity logs;  habit/timed -> read goal_logs.
 const GOAL_KINDS = {
   perfect_days: { defaultTarget: 3,  unit: "d",   type: "min" },
   muscle:       { defaultTarget: 1,  unit: "x",   type: "min" },
@@ -79,7 +81,47 @@ const GOAL_KINDS = {
   active_green: { defaultTarget: 4,  unit: "d",   type: "min" },
   diet_red:     { defaultTarget: 1,  unit: "d",   type: "max" },
   workouts:     { defaultTarget: 4,  unit: "x",   type: "min" },
+  habit:        { defaultTarget: 7,  unit: "d",   type: "min" },  // generic checkbox habit -> goal_logs
+  timed:        { defaultTarget: 60, unit: "min", type: "min" },  // generic minutes goal -> goal_logs
 };
+
+// Which broad CATEGORY each kind belongs to. Drives how a goal is logged & shown:
+//   workout -> completed by logging a gym session
+//   habit   -> a daily yes/no checkbox
+//   timed   -> minutes per day, summed across the week
+const GOAL_TYPE_BY_KIND = {
+  muscle: "workout", workouts: "workout",
+  zone2: "timed", timed: "timed",
+  diet_green: "habit", active_green: "habit", diet_red: "habit", habit: "habit",
+  perfect_days: "habit",
+};
+
+// Default emoji + color per kind (used when a goal hasn't picked its own).
+const GOAL_EMOJI_BY_KIND = {
+  perfect_days:"⭐", muscle:"💪", workouts:"🏋", zone2:"🫀", timed:"⏱",
+  diet_green:"🥗", active_green:"👟", diet_red:"🔴", habit:"✅",
+};
+function defaultGoalColor(kind) {
+  if (kind === "zone2" || kind === "timed") return "#38bdf8";   // blue
+  if (kind === "diet_red") return "#dc2626";                    // red (a "max" cap)
+  if (kind === "muscle" || kind === "workouts") return "#FF6B35"; // orange
+  return "#4ade80";                                             // green (habits)
+}
+
+// 8 swatches for the goal color picker.
+const GOAL_COLORS = ["#FF6B35","#4ade80","#38bdf8","#a78bfa","#fbbf24","#f472b6","#dc2626","#94a3b8"];
+
+// Fill in type/color/emoji/active for any goal (derive-on-read so existing
+// stored goals keep working without a destructive migration).
+function normalizeGoal(g) {
+  return {
+    ...g,
+    type:   g.type   || GOAL_TYPE_BY_KIND[g.kind] || "habit",
+    color:  g.color  || defaultGoalColor(g.kind),
+    emoji:  g.emoji  || GOAL_EMOJI_BY_KIND[g.kind] || "•",
+    active: g.active === false ? false : true,
+  };
+}
 
 // Andrew's starting goals (editable).
 const DEFAULT_GOAL_LIST = [
@@ -103,7 +145,7 @@ function catOfEx(exId, customExercises) {
 
 // Returns { got, target, hit, unit, type, label } for a goal this week.
 function computeGoalProgress(goal, ctx) {
-  const { history, dietLog, activeLog, zone2Log, weekDays, customExercises } = ctx;
+  const { history, dietLog, activeLog, zone2Log, goalLogs = [], weekDays, customExercises } = ctx;
   const weekSet = new Set(weekDays);
   const meta = GOAL_KINDS[goal.kind] || { unit: "", type: "min" };
   const target = goal.target ?? meta.defaultTarget ?? 1;
@@ -136,6 +178,12 @@ function computeGoalProgress(goal, ctx) {
     const days = new Set();
     for (const w of history) { const d = isoDate(new Date(w.date)); if (weekSet.has(d)) days.add(d); }
     got = days.size;
+  } else if (goal.kind === "habit") {
+    // Generic daily checkbox habit — count logged completions this week.
+    got = goalLogs.filter(l => l.goal_id === goal.id && weekSet.has(l.date) && l.completed).length;
+  } else if (goal.kind === "timed") {
+    // Generic minutes goal — sum logged minutes this week.
+    got = goalLogs.filter(l => l.goal_id === goal.id && weekSet.has(l.date)).reduce((a, l) => a + (l.value || 0), 0);
   } else if (goal.kind === "perfect_days") {
     const wkoutDays = new Set(history.map(w => isoDate(new Date(w.date))));
     got = weekDays.filter(d => dietLog[d] === "green" && activeLog[d] === "green" && wkoutDays.has(d)).length;
@@ -390,8 +438,10 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateDiet, onUpdateActive, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
-  const goalList = Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST;
+function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], goalLogs = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateDiet, onUpdateActive, onToggleGoal, onSetGoalMinutes, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
+  const goalList = (Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST).map(normalizeGoal).filter(g => g.active !== false);
+  const [minsEditGoal, setMinsEditGoal] = useState(null); // goalId currently entering minutes
+  const [minsInput, setMinsInput] = useState("");
   const [addingToday, setAddingToday] = useState(false);
   const [newTodayText, setNewTodayText] = useState("");
   // Simple reference targets derived from the goal list (for trend goal-lines + perfect-day hero)
@@ -440,7 +490,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
 
   // Weekly goal completion — each goal counts as ONE binary hit (so a 60-min
   // Zone 2 goal weighs the same as "Chest 1x", not 60 points).
-  const goalProgresses = goalList.map(g => ({ goal: g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises }) }));
+  const goalProgresses = goalList.map(g => ({ goal: g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, goalLogs, weekDays: thisWeekDays, customExercises }) }));
   const goalsHit = goalProgresses.filter(x => x.p.hit).length;
   const goalsTotal = goalProgresses.length;
   const weekPct = goalsTotal ? Math.round((goalsHit/goalsTotal)*100) : 0;
@@ -547,39 +597,64 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
 
       {/* GOALS — core part of the homepage */}
       {(() => {
-        const ICONS = { perfect_days:"⭐", zone2:"🫀", diet_green:"🥗", active_green:"👟", diet_red:"🔴", workouts:"🏋", muscle:"💪" };
-        const goalColor = (kind) => kind==="perfect_days"?C.accent : kind==="zone2"?C.blue : kind==="diet_red"?C.red : kind==="muscle"?C.accent : C.green;
         const progresses = goalProgresses;
         const hitCount = goalsHit;
         const total = goalsTotal;
         return (
           <div style={{background:`linear-gradient(160deg, ${C.card}, ${C.surface})`,border:`1px solid ${C.accent}40`,borderRadius:16,padding:"16px 16px 8px",marginBottom:14,boxShadow:`0 0 30px ${C.accent}12`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>THIS WEEK'S GOALS</div>
+              <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>YOUR WEEK</div>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:(total>0&&hitCount===total)?C.green:C.sub}}>{hitCount}/{total} hit</span>
                 {onEditGoals && <button onClick={onEditGoals} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO,padding:"4px 9px"}}>Edit</button>}
               </div>
             </div>
             {total === 0 ? (
-              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,textAlign:"center",padding:"10px 0 16px"}}>No goals yet. Tap Edit to add some.</div>
+              <div style={{fontSize:11,color:C.muted,fontFamily:MONO,textAlign:"center",padding:"10px 0 16px",lineHeight:1.6}}>No goals yet. Tap Edit to add your first — a workout, a habit, a skill, anything you want to build consistently.</div>
             ) : progresses.map(({goal, p}) => {
-              // Completed goals read green ("done"); in-progress shows the theme color
-              // (orange for workout/muscle, blue for Zone 2, red when over a max cap).
-              const inProgress = goal.kind==="zone2" ? C.blue : goal.kind==="diet_red" ? C.red : (goal.kind==="muscle"||goal.kind==="workouts") ? C.accent : C.green;
-              const color = p.hit ? C.green : inProgress;
+              // Completed goals read green ("done"); in-progress shows the goal's own
+              // color; a "max" cap turns red once it's exceeded.
+              const over = p.type==="max" && p.got > p.target;
+              const color = p.hit ? C.green : over ? C.red : goal.color;
               const pct = Math.min(p.got/Math.max(p.target,1),1)*100;
               const tgt = p.type==="max" ? `≤${p.target}${p.unit}` : `${p.target}${p.unit}`;
-              const over = p.type==="max" && p.got > p.target;
+              // Generic habit / timed goals are logged right here from Home.
+              const loggable = goal.kind === "habit" || goal.kind === "timed";
+              const todayDone = goalLogs.some(l => l.goal_id===goal.id && l.date===today && l.completed);
+              const todayMins = goalLogs.find(l => l.goal_id===goal.id && l.date===today)?.value || 0;
+              const editing = minsEditGoal === goal.id;
               return (
                 <div key={goal.id} style={{marginBottom:14}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:5}}>
-                    <span style={{fontSize:12.5,color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",gap:7}}>
-                      <span style={{fontSize:14}}>{ICONS[goal.kind]||"•"}</span>{p.label}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5,gap:8}}>
+                    <span style={{fontSize:12.5,color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",gap:7,minWidth:0}}>
+                      <span style={{fontSize:14}}>{goal.emoji}</span>
+                      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.label}</span>
                     </span>
-                    <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:p.hit?color:over?C.red:C.sub}}>
-                      {p.got}<span style={{color:C.dim,fontWeight:400}}>/{tgt}</span>{p.hit?" ✓":""}
-                    </span>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                      {loggable && goal.kind==="habit" && onToggleGoal && (
+                        <button onClick={()=>onToggleGoal(goal.id)} title="Log today"
+                          style={{background:todayDone?goal.color+"22":"transparent",border:`1px solid ${todayDone?goal.color:C.border2}`,borderRadius:7,color:todayDone?goal.color:C.muted,fontSize:10.5,fontFamily:MONO,padding:"4px 9px",cursor:"pointer"}}>
+                          {todayDone ? "✓ today" : "+ today"}
+                        </button>
+                      )}
+                      {loggable && goal.kind==="timed" && onSetGoalMinutes && (
+                        editing ? (
+                          <input autoFocus type="number" inputMode="numeric" value={minsInput} placeholder="min"
+                            onChange={e=>setMinsInput(e.target.value)}
+                            onBlur={()=>{onSetGoalMinutes(goal.id, parseInt(minsInput)||0); setMinsEditGoal(null);}}
+                            onKeyDown={e=>{ if(e.key==="Enter"){onSetGoalMinutes(goal.id, parseInt(minsInput)||0); setMinsEditGoal(null);} if(e.key==="Escape"){setMinsEditGoal(null);} }}
+                            style={{width:54,background:"#161616",border:`1px solid ${goal.color}`,borderRadius:7,color:C.text,padding:"4px 6px",fontSize:11,fontFamily:MONO,outline:"none",textAlign:"center"}}/>
+                        ) : (
+                          <button onClick={()=>{setMinsEditGoal(goal.id); setMinsInput(todayMins?String(todayMins):"");}} title="Log minutes today"
+                            style={{background:todayMins?goal.color+"22":"transparent",border:`1px solid ${todayMins?goal.color:C.border2}`,borderRadius:7,color:todayMins?goal.color:C.muted,fontSize:10.5,fontFamily:MONO,padding:"4px 9px",cursor:"pointer"}}>
+                            {todayMins ? `${todayMins}m today` : "+ min"}
+                          </button>
+                        )
+                      )}
+                      <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:p.hit?color:over?C.red:C.sub}}>
+                        {p.got}<span style={{color:C.dim,fontWeight:400}}>/{tgt}</span>{p.hit?" ✓":""}
+                      </span>
+                    </div>
                   </div>
                   <div style={{height:11,background:"#0d0d0d",borderRadius:6,overflow:"hidden",border:`1px solid ${C.border}`}}>
                     <div style={{height:"100%",width:`${pct}%`,borderRadius:5,background:`linear-gradient(90deg, ${color}bb, ${color})`,boxShadow:p.hit?`0 0 12px ${color}99`:"none",transition:"width 0.6s cubic-bezier(0.2,0.8,0.3,1)"}}/>
@@ -1720,7 +1795,7 @@ function computeObservations({ history, dietLog, activeLog, focusSessions, goals
   return obs;
 }
 
-function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log = [], customExercises = {} }) {
+function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log = [], goalLogs = [], customExercises = {} }) {
   const today = isoDate();
   const thisWeekDays = getWeekDays(0);
 
@@ -1733,7 +1808,7 @@ function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards
 
   // Compute progress on the user's configured goals
   const goalLines = (Array.isArray(goals) ? goals : []).map(g => {
-    const p = computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, weekDays: thisWeekDays, customExercises });
+    const p = computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, goalLogs, weekDays: thisWeekDays, customExercises });
     const tgt = p.type === "max" ? `≤${p.target}` : p.target;
     return `- ${p.label}: ${p.got}/${tgt}${p.unit} ${p.hit ? "(hit)" : "(not yet)"}`;
   }).join("\n");
@@ -1826,7 +1901,7 @@ You have tools to mutate Andrew's data and your own memory: log_workout, log_die
 - NEVER call a tool to delete or overwrite data without explicit confirmation. log_diet / log_activity overwrite existing values for that date, so confirm if a value is already set.`;
 }
 
-function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], customExercises={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onBuildWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
+function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], goalLogs=[], customExercises={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onBuildWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
   const GREETING = { role:"assistant", content: "Hey Andrew. I'm Rooney. I remember our past conversations and what you tell me. I can also log past workouts, diet days, activity, Zone 2, or todo cards. What's on your mind?" };
   const [messages, setMessages] = useState(() =>
     (persistedMessages && persistedMessages.length > 0) ? persistedMessages : [GREETING]
@@ -1908,7 +1983,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
     setMessages(nextMsgs);
     setLoading(true);
 
-    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log, customExercises });
+    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log, goalLogs, customExercises });
 
     // Convert displayed messages into API messages (drop UI-only fields).
     // Cap to the last 40 turns so a long thread stays affordable + within limits.
@@ -2223,92 +2298,149 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
   );
 }
 
+// One editable goal card inside the goals editor.
+function GoalEditRow({ g, onChange, onRemove }) {
+  const isTimed = g.type === "timed";
+  const isMax = (GOAL_KINDS[g.kind]?.type) === "max";
+  const step = isTimed ? 10 : 1;
+  const max  = isTimed ? 600 : 7;
+  const unit = isTimed ? "min/wk" : isMax ? "max days/wk" : "days/wk";
+  const typeLabel = isTimed ? "Timed" : g.type === "workout" ? "Workout" : "Habit";
+  const bump = (delta) => onChange({ ...g, target: Math.max(isTimed?0:1, Math.min(max, (g.target||0) + delta)) });
+  return (
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 12px",marginBottom:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+        <input value={g.emoji||""} onChange={e=>onChange({ ...g, emoji: e.target.value.slice(0,2) })} maxLength={2}
+          style={{width:36,flexShrink:0,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 0",fontSize:16,textAlign:"center",outline:"none"}}/>
+        <input value={g.label||""} onChange={e=>onChange({ ...g, label: e.target.value })} placeholder="Goal name"
+          style={{flex:1,minWidth:0,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
+        <button title="Remove goal" onClick={onRemove} style={{width:30,height:30,flexShrink:0,background:"transparent",border:"none",color:"#777",fontSize:14,cursor:"pointer"}}>✕</button>
+      </div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
+        <span style={{fontSize:10,color:C.muted,fontFamily:MONO}}>{typeLabel}{g.group?` · ${g.group}`:""}</span>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <button onClick={()=>bump(-step)} style={{width:28,height:28,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}}>−</button>
+          <span style={{width:40,textAlign:"center",fontSize:14,color:C.text,fontFamily:MONO,fontWeight:700}}>{g.target ?? 0}</span>
+          <button onClick={()=>bump(step)} style={{width:28,height:28,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}}>+</button>
+          <span style={{fontSize:9,color:C.dim,fontFamily:MONO,width:54,textAlign:"right"}}>{unit}</span>
+        </div>
+      </div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {GOAL_COLORS.map(col => (
+            <button key={col} onClick={()=>onChange({ ...g, color: col })} aria-label="Pick color"
+              style={{width:20,height:20,borderRadius:"50%",background:col,border:g.color===col?`2px solid #fff`:`2px solid transparent`,cursor:"pointer",padding:0}}/>
+          ))}
+        </div>
+        <button onClick={()=>onChange({ ...g, active: g.active===false })}
+          style={{flexShrink:0,background:g.active===false?"transparent":g.color+"22",border:`1px solid ${g.active===false?C.border2:g.color}`,borderRadius:7,color:g.active===false?C.muted:g.color,fontSize:10,fontFamily:MONO,padding:"5px 10px",cursor:"pointer"}}>
+          {g.active===false?"Off":"Active"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function GoalsEditor({ goals, onSave, onClose, onReset }) {
-  const [draft, setDraft] = useState(() => goals.map(g => ({ ...g })));
+  const [draft, setDraft] = useState(() => goals.map(g => normalizeGoal({ ...g })));
   const [adding, setAdding] = useState(false);
-  const [newKind, setNewKind] = useState("muscle");
-  const [newGroup, setNewGroup] = useState("Chest");
-  const [newLabel, setNewLabel] = useState("");
+  const [newType, setNewType] = useState("habit");     // workout | habit | timed
+  const [newGroup, setNewGroup] = useState("Any workout");
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState(GOAL_COLORS[1]);
+  const [newEmoji, setNewEmoji] = useState("");
 
-  function bumpTarget(id, delta) {
-    setDraft(d => d.map(g => g.id === id ? { ...g, target: Math.max(0, Math.min(g.kind==="zone2"?600:14, (g.target||0) + delta)) } : g));
-  }
-  function setTarget(id, val) {
-    const n = parseInt(val);
-    setDraft(d => d.map(g => g.id === id ? { ...g, target: isNaN(n) ? 0 : Math.max(0, n) } : g));
-  }
+  function updateGoal(id, next) { setDraft(d => d.map(g => g.id === id ? next : g)); }
   function removeGoal(id) { setDraft(d => d.filter(g => g.id !== id)); }
+
+  function resetAddForm() { setAdding(false); setNewType("habit"); setNewGroup("Any workout"); setNewName(""); setNewColor(GOAL_COLORS[1]); setNewEmoji(""); }
   function addGoal() {
-    const meta = GOAL_KINDS[newKind];
-    const g = { id: "g_" + Math.random().toString(36).slice(2,8), kind: newKind, target: meta.defaultTarget };
-    if (newKind === "muscle") { g.group = newGroup; g.label = newLabel.trim() || newGroup; }
-    else { g.label = newLabel.trim() || ({perfect_days:"Perfect days",zone2:"Zone 2",diet_green:"Clean diet days",active_green:"Active days",diet_red:"Cheat days",workouts:"Workout days"}[newKind] || newKind); }
+    let kind, group;
+    if (newType === "workout") {
+      if (newGroup === "Any workout") { kind = "workouts"; }
+      else { kind = "muscle"; group = newGroup; }
+    } else if (newType === "timed") { kind = "timed"; }
+    else { kind = "habit"; }
+    const label = newName.trim() || (group || (newType==="timed"?"Timed goal":newType==="workout"?"Workout":"New habit"));
+    const target = GOAL_KINDS[kind]?.defaultTarget ?? (newType==="timed"?60:3);
+    const g = normalizeGoal({
+      id: "g_" + Math.random().toString(36).slice(2,8),
+      kind, type: newType, group, label, target,
+      color: newColor, emoji: newEmoji.trim() || undefined, active: true,
+    });
     setDraft(d => [...d, g]);
-    setAdding(false); setNewLabel(""); setNewKind("muscle"); setNewGroup("Chest");
+    resetAddForm();
   }
 
-  function unitFor(kind) { return GOAL_KINDS[kind]?.unit || ""; }
-  function kindLabel(kind) { return { perfect_days:"Perfect days (diet+active+workout)", muscle:"Muscle group", zone2:"Zone 2 minutes", diet_green:"Clean diet days", active_green:"Active days", diet_red:"Cheat days (max)", workouts:"Workout days" }[kind] || kind; }
+  const TYPE_OPTS = [
+    { key:"workout", label:"Workout", hint:"Hit the gym" },
+    { key:"habit",   label:"Habit",   hint:"Daily yes/no" },
+    { key:"timed",   label:"Timed",   hint:"Minutes/week" },
+  ];
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:150,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
-      <div style={{background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,maxHeight:"88vh",display:"flex",flexDirection:"column",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",paddingTop:"calc(16px + env(safe-area-inset-top))",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#0d0d0d"}}>
+      <div style={{background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:480,maxHeight:"90vh",display:"flex",flexDirection:"column",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 18px",paddingTop:"calc(16px + env(safe-area-inset-top))",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#0d0d0d",zIndex:2}}>
           <div>
-            <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Edit Weekly Goals</div>
-            <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginTop:2}}>Muscle groups are "hit it N days/week". Zone 2 is minutes/week.</div>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Your Goals</div>
+            <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginTop:2}}>Workouts, habits, skills — anything you want to build consistently.</div>
           </div>
           <button style={{background:"transparent",border:"none",color:C.muted,fontSize:16,cursor:"pointer"}} onClick={onClose}>✕</button>
         </div>
 
-        <div style={{padding:"8px 16px"}}>
+        <div style={{padding:"12px 16px"}}>
           {draft.map(g => (
-            <div key={g.id} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 0",borderBottom:`1px solid ${C.border}`}}>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,color:C.text,fontFamily:MONO}}>{g.label || g.group || g.kind}</div>
-                <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{kindLabel(g.kind)}{g.kind==="diet_red"?" · at most":""}</div>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:5}}>
-                <button style={{width:28,height:28,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>bumpTarget(g.id, g.kind==="zone2"?-10:-1)}>−</button>
-                <input type="number" min="0" value={g.target ?? 0} onChange={e=>setTarget(g.id, e.target.value)}
-                  style={{width:48,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"6px 0",fontSize:14,fontFamily:MONO,textAlign:"center",outline:"none"}}/>
-                <button style={{width:28,height:28,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:14,cursor:"pointer",fontFamily:MONO}} onClick={()=>bumpTarget(g.id, g.kind==="zone2"?10:1)}>+</button>
-                <span style={{fontSize:9,color:C.dim,fontFamily:MONO,width:26,textAlign:"right"}}>{unitFor(g.kind)}/wk</span>
-                <button title="Remove goal" style={{width:26,height:26,background:"transparent",border:"none",color:"#777",fontSize:13,cursor:"pointer",flexShrink:0}} onClick={()=>removeGoal(g.id)}>✕</button>
-              </div>
-            </div>
+            <GoalEditRow key={g.id} g={g} onChange={next=>updateGoal(g.id, next)} onRemove={()=>removeGoal(g.id)} />
           ))}
 
           {adding ? (
-            <div style={{background:"#161616",border:`1px solid ${C.accent}`,borderRadius:10,padding:12,marginTop:12}}>
-              <div style={{fontSize:11,color:C.accent,fontFamily:MONO,marginBottom:10,letterSpacing:"0.1em",fontWeight:700}}>NEW GOAL</div>
-              <select value={newKind} onChange={e=>setNewKind(e.target.value)} style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px",fontSize:12,fontFamily:MONO,outline:"none",marginBottom:8}}>
-                <option value="muscle">Muscle group (Nx/week)</option>
-                <option value="zone2">Zone 2 minutes/week</option>
-                <option value="diet_green">Clean diet days/week</option>
-                <option value="active_green">Active days/week</option>
-                <option value="diet_red">Cheat days (max/week)</option>
-                <option value="workouts">Workout days/week</option>
-              </select>
-              {newKind === "muscle" && (
-                <select value={newGroup} onChange={e=>setNewGroup(e.target.value)} style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px",fontSize:12,fontFamily:MONO,outline:"none",marginBottom:8}}>
+            <div style={{background:"#161616",border:`1px solid ${C.accent}`,borderRadius:12,padding:14,marginTop:6}}>
+              <div style={{fontSize:11,color:C.accent,fontFamily:MONO,marginBottom:12,letterSpacing:"0.1em",fontWeight:700}}>NEW GOAL</div>
+
+              <div style={{display:"flex",gap:6,marginBottom:10}}>
+                {TYPE_OPTS.map(t => (
+                  <button key={t.key} onClick={()=>setNewType(t.key)}
+                    style={{flex:1,background:newType===t.key?C.accent+"22":"#1a1a1a",border:`1px solid ${newType===t.key?C.accent:C.border2}`,borderRadius:8,padding:"8px 4px",cursor:"pointer",textAlign:"center"}}>
+                    <div style={{fontSize:12,color:newType===t.key?C.accent:C.text,fontFamily:MONO,fontWeight:700}}>{t.label}</div>
+                    <div style={{fontSize:8.5,color:C.muted,fontFamily:MONO,marginTop:2}}>{t.hint}</div>
+                  </button>
+                ))}
+              </div>
+
+              {newType === "workout" && (
+                <select value={newGroup} onChange={e=>setNewGroup(e.target.value)} style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"9px",fontSize:12,fontFamily:MONO,outline:"none",marginBottom:8}}>
+                  <option value="Any workout">Any workout</option>
                   {Object.keys(MUSCLE_GROUPS).map(grp => <option key={grp} value={grp}>{grp}</option>)}
                 </select>
               )}
-              <input value={newLabel} onChange={e=>setNewLabel(e.target.value)} placeholder={newKind==="muscle"?`Label (default: ${newGroup})`:"Label (optional)"}
-                style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+
+              <div style={{display:"flex",gap:8,marginBottom:10}}>
+                <input value={newEmoji} onChange={e=>setNewEmoji(e.target.value.slice(0,2))} maxLength={2} placeholder="🙂"
+                  style={{width:42,flexShrink:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"9px 0",fontSize:16,textAlign:"center",outline:"none"}}/>
+                <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder={newType==="workout"?(newGroup==="Any workout"?"Name (e.g. Lift)":`Name (default: ${newGroup})`):newType==="timed"?"Name (e.g. Read, Meditate)":"Name (e.g. Floss, Journal)"}
+                  style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"9px 10px",fontSize:12,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+
+              <div style={{display:"flex",gap:7,marginBottom:12,flexWrap:"wrap"}}>
+                {GOAL_COLORS.map(col => (
+                  <button key={col} onClick={()=>setNewColor(col)} aria-label="Pick color"
+                    style={{width:24,height:24,borderRadius:"50%",background:col,border:newColor===col?`2px solid #fff`:`2px solid transparent`,cursor:"pointer",padding:0}}/>
+                ))}
+              </div>
+
               <div style={{display:"flex",gap:6}}>
-                <button style={{flex:1,background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={addGoal}>Add goal</button>
-                <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAdding(false);setNewLabel("");}}>Cancel</button>
+                <button style={{flex:1,background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"9px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={addGoal}>Add goal</button>
+                <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",fontSize:12,cursor:"pointer",fontFamily:MONO}} onClick={resetAddForm}>Cancel</button>
               </div>
             </div>
           ) : (
-            <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.accent}`,borderRadius:10,color:C.accent,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO,marginTop:12,letterSpacing:"0.05em"}} onClick={()=>setAdding(true)}>+ Add a goal</button>
+            <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.accent}`,borderRadius:10,color:C.accent,padding:"12px",fontSize:12,cursor:"pointer",fontFamily:MONO,marginTop:4,letterSpacing:"0.05em"}} onClick={()=>setAdding(true)}>+ Add a goal</button>
           )}
         </div>
 
-        <div style={{display:"flex",gap:8,padding:"12px 16px",borderTop:`1px solid ${C.border}`,position:"sticky",bottom:0,background:"#0d0d0d"}}>
-          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onReset}>Reset to defaults</button>
+        <div style={{display:"flex",gap:8,padding:"12px 16px",paddingBottom:"calc(12px + env(safe-area-inset-bottom))",borderTop:`1px solid ${C.border}`,position:"sticky",bottom:0,background:"#0d0d0d"}}>
+          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onReset}>Reset</button>
           <div style={{flex:1}}/>
           <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={onClose}>Cancel</button>
           <button style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"10px 18px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={()=>onSave(draft)}>Save</button>
@@ -2332,7 +2464,14 @@ function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, o
     if (error) setPwMsg({ kind:"err", text: error.message || "Couldn't update password." });
     else { setPwMsg({ kind:"ok", text: "Password saved. Use it to sign in next time." }); setNewPw(""); setShowPwForm(false); setTimeout(()=>setPwMsg(null), 4000); }
   }
-  const kindLabel = { perfect_days:"Perfect days", muscle:"Muscle group", zone2:"Zone 2", diet_green:"Clean diet", active_green:"Active", diet_red:"Cheat days", workouts:"Workouts" };
+  const typeName = { workout:"Workout", habit:"Habit", timed:"Timed" };
+  const goalSub = (g) => {
+    const n = normalizeGoal(g);
+    const t = typeName[n.type] || "Goal";
+    const freq = n.type === "timed" ? `${n.target} min/wk`
+      : (GOAL_KINDS[n.kind]?.type === "max" ? `≤${n.target}/wk` : `${n.target}×/wk`);
+    return `${t} · ${freq}`;
+  };
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:170,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
       <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:480,maxHeight:"90vh",background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"20px 20px 0 0",display:"flex",flexDirection:"column",overflowY:"auto"}}>
@@ -2348,9 +2487,12 @@ function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, o
             {goals.length===0 ? (
               <div style={{fontSize:11,color:C.muted,fontFamily:MONO,padding:"4px 0 10px"}}>No goals yet.</div>
             ) : goals.map(g=>(
-              <div key={g.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",marginBottom:6}}>
-                <span style={{fontSize:13,color:C.text,fontFamily:MONO}}>{g.label || g.group || g.kind}</span>
-                <span style={{fontSize:10,color:C.muted,fontFamily:MONO}}>{kindLabel[g.kind]||g.kind} · {g.kind==="zone2"?`${g.target}min`:`${g.target}${g.kind==="diet_red"?" max":"x"}`}/wk</span>
+              <div key={g.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",marginBottom:6,opacity:g.active===false?0.5:1}}>
+                <span style={{fontSize:13,color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",gap:7,minWidth:0}}>
+                  <span style={{fontSize:14}}>{normalizeGoal(g).emoji}</span>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.label || g.group || g.kind}</span>
+                </span>
+                <span style={{fontSize:10,color:C.muted,fontFamily:MONO,flexShrink:0,marginLeft:8}}>{goalSub(g)}</span>
               </div>
             ))}
           </div>
@@ -2396,6 +2538,7 @@ export default function App() {
   const zone2State    = useZone2Log(userId);
   const settingsState = useSettings(userId, DEFAULT_GOAL_LIST);
   const convoState    = useRooneyConversation(userId);
+  const goalLogsState = useGoalLogs(userId);
 
   // UI state
   const [tab, setTab] = useState("home");
@@ -2417,11 +2560,15 @@ export default function App() {
   }
   const [migrationSummary, setMigrationSummary] = useState(null);
 
-  // Editable weekly goals (configurable list, cloud-synced via user_settings)
-  // Drop any legacy perfect_days goals (retired — redundant with the individual goals)
-  const goalList = (settingsState.goals && settingsState.goals.length ? settingsState.goals : DEFAULT_GOAL_LIST).filter(g => g.kind !== "perfect_days");
+  // Editable weekly goals (configurable list, cloud-synced via user_settings).
+  // Drop any legacy perfect_days goals (retired — redundant with the individual
+  // goals), then normalize so every goal has type/color/emoji/active.
+  const goalList = (settingsState.goals && settingsState.goals.length ? settingsState.goals : DEFAULT_GOAL_LIST)
+    .filter(g => g.kind !== "perfect_days")
+    .map(normalizeGoal);
   const setGoalList = settingsState.setGoals;
   const zone2Log = zone2State.data;
+  const goalLogs = goalLogsState.data;
 
   // Migrate any pre-existing localStorage data into Supabase on first sign-in
   useEffect(() => {
@@ -2474,6 +2621,10 @@ export default function App() {
   function updateDiet(d,v){ dietState.setForDate(d, v); }
   function updateActive(d,v){ activityState.setForDate(d, v); }
   function addSession(s){ focusState.add(s); }
+
+  // Goal logging (for generic habit + timed goals, backed by goal_logs)
+  function toggleGoalToday(goalId, date=isoDate()){ goalLogsState.toggle(goalId, date); }
+  function setGoalMinutes(goalId, minutes, date=isoDate()){ goalLogsState.setValue(goalId, date, minutes); }
 
   async function clearAll() {
     if (!window.confirm("Clear ALL data? This wipes your workouts, diet, activity, focus sessions, boards, and custom exercises from the cloud. Cannot be undone.")) return;
@@ -2702,7 +2853,7 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
           <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
@@ -2726,6 +2877,7 @@ export default function App() {
           memories={memoriesState.data}
           goals={goalList}
           zone2Log={zone2Log}
+          goalLogs={goalLogs}
           customExercises={customExercises}
           persistedMessages={convoState.messages}
           onSaveConversation={convoState.save}

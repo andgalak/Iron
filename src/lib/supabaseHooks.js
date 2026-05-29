@@ -446,6 +446,52 @@ export function useRooneyConversation(userId) {
   return { messages, loading, save, clear };
 }
 
+// ─── GOAL LOGS (habit + timed user-defined goals) ─────────────────────────────
+export function useGoalLogs(userId) {
+  const [data, setData] = useState([]); // [{goal_id, date, completed, value}]
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase.from("goal_logs").select("*").eq("user_id", userId)
+      .then(({ data, error }) => {
+        if (error) console.error("goal_logs load:", error);
+        setData(data || []);
+        setLoading(false);
+      });
+  }, [userId]);
+
+  // Toggle a binary habit completion for a date
+  async function toggle(goalId, date) {
+    const existing = data.find(g => g.goal_id === goalId && g.date === date);
+    if (existing) {
+      setData(d => d.filter(g => !(g.goal_id === goalId && g.date === date)));
+      const { error } = await supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date);
+      if (error) console.error("goal_log delete:", error);
+    } else {
+      const row = { user_id: userId, goal_id: goalId, date, completed: true, value: null };
+      setData(d => [...d, row]);
+      const { error } = await supabase.from("goal_logs").upsert(row);
+      if (error) console.error("goal_log upsert:", error);
+    }
+  }
+
+  // Set minutes for a timed goal on a date (null/0 clears)
+  async function setValue(goalId, date, minutes) {
+    if (!minutes || minutes <= 0) {
+      setData(d => d.filter(g => !(g.goal_id === goalId && g.date === date)));
+      await supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date);
+      return;
+    }
+    const row = { user_id: userId, goal_id: goalId, date, completed: true, value: minutes };
+    setData(d => { const o = d.filter(g => !(g.goal_id===goalId && g.date===date)); return [...o, row]; });
+    const { error } = await supabase.from("goal_logs").upsert(row);
+    if (error) console.error("goal_log value:", error);
+  }
+
+  return { data, loading, toggle, setValue };
+}
+
 // ─── ONE-TIME MIGRATION: localStorage → Supabase ──────────────────────────────
 const MIG_FLAG = "iron_migrated_to_supabase_v1";
 

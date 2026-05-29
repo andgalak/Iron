@@ -207,6 +207,30 @@ create policy "own rows: user_settings"
   with check (auth.uid() = user_id);
 
 -- ────────────────────────────────────────────────────────────────────────────
+-- GOAL LOGS: per-day completions for user-defined habit and timed goals.
+-- (Workout goals read the workouts table; Eat clean / Active read diet/activity
+-- logs; Zone 2 reads zone2_log. Other habit/timed goals log here.)
+-- ────────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.goal_logs (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  goal_id text not null,
+  date date not null,
+  completed boolean not null default true,
+  value integer,                       -- minutes for timed goals; null for habit
+  created_at timestamptz not null default now(),
+  primary key (user_id, goal_id, date)
+);
+create index if not exists goal_logs_user_idx on public.goal_logs (user_id, date desc);
+
+alter table public.goal_logs enable row level security;
+drop policy if exists "own rows: goal_logs" on public.goal_logs;
+create policy "own rows: goal_logs"
+  on public.goal_logs for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- ────────────────────────────────────────────────────────────────────────────
 -- ROONEY CONVERSATION: one continuous chat thread per user, so Rooney sees the
 -- full prior conversation every time (true continuity, not just stored facts).
 -- ────────────────────────────────────────────────────────────────────────────

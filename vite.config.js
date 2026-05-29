@@ -11,7 +11,7 @@ export default defineConfig({
       manifest: {
         name: 'IRON',
         short_name: 'IRON',
-        description: 'Personal tracker for workouts, diet, activity, and focus.',
+        description: 'Daily discipline tracker — build consistency in workouts, habits, and skills.',
         start_url: '/',
         display: 'standalone',
         background_color: '#080808',
