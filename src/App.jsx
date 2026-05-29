@@ -661,7 +661,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
             <ScoreCard label="CLEAN DIET" value={monthData.totals.dietGreen} color={C.green}/>
             <ScoreCard label="ACTIVE 🟢" value={monthData.totals.active} color={C.green}/>
             <ScoreCard label="FOCUS HRS" value={monthData.totals.focusMins>0?`${Math.round(monthData.totals.focusMins/60*10)/10}h`:"—"} color={C.blue}/>
-            <ScoreCard label="RED DIET 🔴" value={monthData.totals.dietRed} color={monthData.totals.dietRed>4?C.red:C.text}/>
+            <ScoreCard label="CHEAT DAYS 🔴" value={monthData.totals.dietRed} color={monthData.totals.dietRed>4?C.red:C.text}/>
           </div>
         </>
       )}
@@ -701,7 +701,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], cu
 
       {/* Red diet days trend */}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:14}}>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>RED DIET DAYS / WEEK · max {G.dietRed}</div>
+        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>CHEAT DAYS / WEEK · max {G.dietRed}</div>
         <div style={{display:"flex",alignItems:"flex-end",gap:4,height:40}}>
           {weeks.map((w,i)=>{
             const h=Math.max((w.dr/3)*36,w.dr>0?4:2);
@@ -1865,7 +1865,7 @@ function computeObservations({ history, dietLog, activeLog, focusSessions, goals
 
   // Red diet days
   const redDays = thisWeekDays.filter(d => dietLog[d]==="red").length;
-  if (redDays > G.dietRed) obs.push(`Red diet days over cap: ${redDays} (max ${G.dietRed}).`);
+  if (redDays > G.dietRed) obs.push(`Cheat days over cap: ${redDays} (max ${G.dietRed}).`);
 
   // PR check on latest workout
   const latest = history[0];
@@ -2434,13 +2434,13 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
     const meta = GOAL_KINDS[newKind];
     const g = { id: "g_" + Math.random().toString(36).slice(2,8), kind: newKind, target: meta.defaultTarget };
     if (newKind === "muscle") { g.group = newGroup; g.label = newLabel.trim() || newGroup; }
-    else { g.label = newLabel.trim() || ({perfect_days:"Perfect days",zone2:"Zone 2",diet_green:"Clean diet days",active_green:"Active days",diet_red:"Red diet days",workouts:"Workout days"}[newKind] || newKind); }
+    else { g.label = newLabel.trim() || ({perfect_days:"Perfect days",zone2:"Zone 2",diet_green:"Clean diet days",active_green:"Active days",diet_red:"Cheat days",workouts:"Workout days"}[newKind] || newKind); }
     setDraft(d => [...d, g]);
     setAdding(false); setNewLabel(""); setNewKind("muscle"); setNewGroup("Chest");
   }
 
   function unitFor(kind) { return GOAL_KINDS[kind]?.unit || ""; }
-  function kindLabel(kind) { return { perfect_days:"Perfect days (diet+active+workout)", muscle:"Muscle group", zone2:"Zone 2 minutes", diet_green:"Clean diet days", active_green:"Active days", diet_red:"Red diet days (max)", workouts:"Workout days" }[kind] || kind; }
+  function kindLabel(kind) { return { perfect_days:"Perfect days (diet+active+workout)", muscle:"Muscle group", zone2:"Zone 2 minutes", diet_green:"Clean diet days", active_green:"Active days", diet_red:"Cheat days (max)", workouts:"Workout days" }[kind] || kind; }
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:150,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
@@ -2480,7 +2480,7 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
                 <option value="zone2">Zone 2 minutes/week</option>
                 <option value="diet_green">Clean diet days/week</option>
                 <option value="active_green">Active days/week</option>
-                <option value="diet_red">Red diet days (max/week)</option>
+                <option value="diet_red">Cheat days (max/week)</option>
                 <option value="workouts">Workout days/week</option>
               </select>
               {newKind === "muscle" && (
