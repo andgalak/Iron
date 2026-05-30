@@ -228,7 +228,10 @@ const EXERCISES = {
   // Full Body
   burpee:"Burpees", kb_swing:"KB Swing", clean_press:"Clean & Press", thruster:"Thruster",
   farmers:"Farmer's Carry", med_ball:"Med Ball Slam", turkish:"Turkish Get-Up", box_jump:"Box Jump",
-  plank:"Plank", russian_twist:"Russian Twist", hanging_leg:"Hanging Leg Raise",
+  // Abs / Core
+  plank:"Plank", side_plank:"Side Plank", russian_twist:"Russian Twist", hanging_leg:"Hanging Leg Raise",
+  crunch:"Crunch", bicycle_crunch:"Bicycle Crunch", sit_up:"Sit-Up", leg_raise:"Lying Leg Raise",
+  ab_wheel:"Ab Wheel Rollout", dead_bug:"Dead Bug", mountain_climber:"Mountain Climbers", cable_crunch:"Cable Crunch",
   // Cardio
   zone2:"Zone 2 Cardio", stairmaster:"Stairmaster", rowing:"Rowing Machine",
   bike:"Stationary Bike", treadmill:"Treadmill Run", jump_rope:"Jump Rope",
@@ -261,7 +264,13 @@ const EX_META = {
   // Full Body
   burpee:{muscle:"Full Body",cat:"Full Body"}, kb_swing:{muscle:"Full Body",cat:"Full Body"}, clean_press:{muscle:"Full Body",cat:"Full Body"}, thruster:{muscle:"Full Body",cat:"Full Body"},
   farmers:{muscle:"Full Body",cat:"Full Body"}, med_ball:{muscle:"Full Body",cat:"Full Body"}, turkish:{muscle:"Full Body",cat:"Full Body"}, box_jump:{muscle:"Full Body",cat:"Full Body"},
-  plank:{muscle:"Core",cat:"Full Body"}, russian_twist:{muscle:"Core",cat:"Full Body"}, hanging_leg:{muscle:"Core",cat:"Full Body"},
+  // Abs / Core — all bodyweight by default (enter reps, leave weight blank or 0)
+  plank:{muscle:"Core",cat:"Abs"}, side_plank:{muscle:"Core",cat:"Abs"},
+  russian_twist:{muscle:"Core",cat:"Abs"}, hanging_leg:{muscle:"Core",cat:"Abs"},
+  crunch:{muscle:"Core",cat:"Abs"}, bicycle_crunch:{muscle:"Core",cat:"Abs"},
+  sit_up:{muscle:"Core",cat:"Abs"}, leg_raise:{muscle:"Core",cat:"Abs"},
+  ab_wheel:{muscle:"Core",cat:"Abs"}, dead_bug:{muscle:"Core",cat:"Abs"},
+  mountain_climber:{muscle:"Core",cat:"Abs"}, cable_crunch:{muscle:"Core",cat:"Abs"},
   // Cardio
   zone2:{muscle:"Cardio",cat:"Cardio"}, stairmaster:{muscle:"Cardio",cat:"Cardio"}, rowing:{muscle:"Cardio",cat:"Cardio"},
   bike:{muscle:"Cardio",cat:"Cardio"}, treadmill:{muscle:"Cardio",cat:"Cardio"}, jump_rope:{muscle:"Cardio",cat:"Cardio"},
@@ -1908,7 +1917,7 @@ function WorkoutScreen({
             <div style={{display:"flex",justifyContent:"space-between",padding:"16px 18px",borderBottom:`1px solid ${C.border}`}}><span style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO}}>Add Exercise</span><button style={{background:"transparent",border:"none",color:C.muted,fontSize:16,cursor:"pointer"}} onClick={()=>setShowPicker(false)}>✕</button></div>
             <input style={{background:"#161616",border:`1px solid ${C.border2}`,borderRadius:10,color:C.text,padding:"10px 14px",fontSize:13,margin:"12px 16px 0",outline:"none",fontFamily:MONO}} placeholder="Search…" value={exSearch} onChange={e=>setExSearch(e.target.value)} autoFocus/>
             <div style={{display:"flex",gap:6,padding:"10px 16px",overflowX:"auto",flexShrink:0}}>
-              {["All","Push","Pull","Legs","Arms","PT","Full Body","Cardio"].map(c=><button key={c} style={{borderRadius:20,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO,whiteSpace:"nowrap",flexShrink:0,background:exCat===c?C.accent:"#1a1a1a",color:exCat===c?"#000":C.muted,border:exCat===c?"none":`1px solid ${C.border}`}} onClick={()=>setExCat(c)}>{c}</button>)}
+              {["All","Push","Pull","Legs","Arms","Abs","PT","Full Body","Cardio"].map(c=><button key={c} style={{borderRadius:20,padding:"5px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO,whiteSpace:"nowrap",flexShrink:0,background:exCat===c?C.accent:"#1a1a1a",color:exCat===c?"#000":C.muted,border:exCat===c?"none":`1px solid ${C.border}`}} onClick={()=>setExCat(c)}>{c}</button>)}
             </div>
             <div style={{overflowY:"auto",padding:"0 12px 24px"}}>
               {creatingCustom ? (
@@ -1928,7 +1937,7 @@ function WorkoutScreen({
                       <div style={{fontSize:8,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4,fontWeight:700}}>PICKER TAB</div>
                       <select value={newExCat} onChange={e=>setNewExCat(e.target.value)}
                         style={{width:"100%",background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"7px 8px",fontSize:12,fontFamily:MONO,outline:"none"}}>
-                        {["Push","Pull","Legs","Arms","PT","Full Body","Cardio"].map(c=><option key={c} value={c}>{c}</option>)}
+                        {["Push","Pull","Legs","Arms","Abs","PT","Full Body","Cardio"].map(c=><option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   </div>
