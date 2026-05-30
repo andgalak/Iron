@@ -291,19 +291,41 @@ function isoDate(d=new Date()) {
 }
 function e1RM(w, r) { if (!w || !r) return 0; return Math.round(w * (1 + r/30)); }
 function formatDuration(sec) { if (!sec || sec < 60) return `${sec||0}s`; return `${Math.round(sec/60)} min`; }
-function bestRMByExercise(history, excludeId=null) {
-  const result = {};
-  for (const w of history) {
-    if (excludeId && w.id === excludeId) continue;
-    for (const ex of w.exercises) {
-      for (const s of ex.sets) {
+// A "bodyweight" set is one the user explicitly marked with 0 weight + reps
+// (pull-ups, push-ups, dips, etc.). For these, the PR metric is REPS, not e1RM.
+function isBwSet(s) {
+  const r = parseInt(s?.reps);
+  if (!r) return false;
+  if (s?.weight === "" || s?.weight == null) return false;
+  return parseFloat(s.weight) === 0;
+}
+// Returns { kind: "weight"|"bw"|null, value } so PR comparisons stay in the
+// right "space" — weighted sets compare e1RM, bodyweight sets compare reps.
+function setMetric(s) {
+  const r = parseInt(s?.reps);
+  if (!r) return { kind: null, value: 0 };
+  if (isBwSet(s)) return { kind: "bw", value: r };
+  const w = parseFloat(s?.weight);
+  if (!w) return { kind: null, value: 0 };
+  return { kind: "weight", value: Math.round(w * (1 + r/30)) };
+}
+// Per-exercise best across history: { exId: { e1rm, bwReps } }.
+function bestByExercise(history, excludeId=null) {
+  const out = {};
+  for (const wk of history) {
+    if (excludeId && wk.id === excludeId) continue;
+    for (const ex of (wk.exercises || [])) {
+      const rec = out[ex.exId] || { e1rm: 0, bwReps: 0 };
+      for (const s of (ex.sets || [])) {
         if (!s.done) continue;
-        const rm = e1RM(parseFloat(s.weight), parseInt(s.reps));
-        if (rm > (result[ex.exId] || 0)) result[ex.exId] = rm;
+        const m = setMetric(s);
+        if (m.kind === "weight" && m.value > rec.e1rm)   rec.e1rm = m.value;
+        if (m.kind === "bw"     && m.value > rec.bwReps) rec.bwReps = m.value;
       }
+      out[ex.exId] = rec;
     }
   }
-  return result;
+  return out;
 }
 function formatTime(s) { const m=Math.floor(s/60).toString().padStart(2,"0"); return `${m}:${(s%60).toString().padStart(2,"0")}`; }
 function getWeekDays(offset=0) {
@@ -1648,7 +1670,7 @@ function WorkoutScreen({
   const prevBestsRef = useRef(null);
   const prTriggeredRef = useRef(new Set());
   const [activePR, setActivePR] = useState(null);
-  if (prevBestsRef.current === null) prevBestsRef.current = bestRMByExercise(history, excludeWorkoutId);
+  if (prevBestsRef.current === null) prevBestsRef.current = bestByExercise(history, excludeWorkoutId);
   const [exercises, setExercises] = useState(() =>
     initialBlocks || initExercises.map(id=>({id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}))
   );
@@ -1752,6 +1774,7 @@ function WorkoutScreen({
           const exName=mergedNames[item.exId]||item.exId; const meta=mergedMeta[item.exId];
           const exVol=item.sets.filter(s=>s.done).reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
           const bestRM=item.sets.reduce((b,s)=>Math.max(b,e1RM(parseFloat(s.weight),parseInt(s.reps))),0);
+          const bestBwReps=item.sets.reduce((b,s)=>Math.max(b, isBwSet(s) ? parseInt(s.reps) : 0),0);
           const lastRef=lastByExercise[item.exId];
           return(
             <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
@@ -1759,16 +1782,19 @@ function WorkoutScreen({
                 <div>
                   <div style={{fontSize:14,fontWeight:600,color:C.text,fontFamily:MONO,marginBottom:2}}>{exName}</div>
                   <div style={{fontSize:11,color:"#7a7a7a",fontFamily:MONO}}>{meta?.muscle} · {meta?.cat}</div>
-                  {lastRef && <div style={{fontSize:10,color:C.accent,fontFamily:MONO,marginTop:3,opacity:0.85}}>last: {lastRef.weight} × {lastRef.reps}</div>}
+                  {lastRef && <div style={{fontSize:10,color:C.accent,fontFamily:MONO,marginTop:3,opacity:0.85}}>last: {parseFloat(lastRef.weight)===0 ? "BW" : `${lastRef.weight} lbs`} × {lastRef.reps}</div>}
                 </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   {exVol>0&&<span style={{fontSize:10,color:C.accent,background:"rgba(255,107,53,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{(exVol/1000).toFixed(1)}k</span>}
-                  {bestRM>0&&<span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{bestRM}</span>}
+                  {bestRM>0
+                    ? <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{bestRM}</span>
+                    : bestBwReps>0 && <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>BW × {bestBwReps}</span>}
                   <button title="Remove exercise" style={{background:"transparent",border:"none",color:"#7a7a7a",fontSize:14,cursor:"pointer",fontFamily:MONO,width:32,height:32,flexShrink:0}} onClick={()=>setExercises(exercises.filter((_,j)=>j!==ei))}>✕</button>
                 </div>
               </div>
               {item.sets.map((s,si)=>{
                 const rm = e1RM(parseFloat(s.weight),parseInt(s.reps));
+                const bwReps = isBwSet(s) ? parseInt(s.reps) : 0;
                 const rowEmpty = !s.weight && !s.reps;
                 // Most recent completed set above this one in the same exercise
                 let lastCompletedAbove = null;
@@ -1790,6 +1816,8 @@ function WorkoutScreen({
                       style={{width:40,height:36,flexShrink:0,background:"transparent",border:`1px solid ${C.border2}`,borderRadius:7,color:C.sub,fontSize:9,fontFamily:MONO,cursor:"pointer",letterSpacing:"0.02em",lineHeight:1.1}}>⧉ copy</button>
                   ) : rm>0 ? (
                     <span style={{fontSize:10,color:C.sub,fontFamily:MONO,width:40,textAlign:"center",flexShrink:0}}>{rm}</span>
+                  ) : bwReps>0 ? (
+                    <span style={{fontSize:9,color:C.purple,fontFamily:MONO,width:40,textAlign:"center",flexShrink:0,letterSpacing:"0.05em"}}>BW</span>
                   ) : (
                     <span style={{width:40,flexShrink:0}}/>
                   )}
@@ -1797,15 +1825,19 @@ function WorkoutScreen({
                   <button aria-label="Mark set complete" style={{width:44,height:44,flexShrink:0,background:"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}} onClick={()=>{
                     const newDone = !s.done;
                     if (newDone) { try { if (navigator.vibrate) navigator.vibrate(15); } catch {} }
-                    // PR detection: only on transition to done, for non-cardio, in non-edit mode
+                    // PR detection: only on transition to done, for non-cardio, in non-edit mode.
+                    // Weighted sets compare e1RM; bodyweight sets (weight=0) compare REPS.
                     if (newDone && mode !== "edit" && mergedMeta[item.exId]?.cat !== "Cardio" && !prTriggeredRef.current.has(s.id)) {
-                      const prm = e1RM(parseFloat(s.weight), parseInt(s.reps));
-                      if (prm > 0) {
-                        const prev = prevBestsRef.current[item.exId] || 0;
-                        if (prm > prev) {
+                      const m = setMetric(s);
+                      if (m.kind) {
+                        const prev = prevBestsRef.current[item.exId] || { e1rm: 0, bwReps: 0 };
+                        let isPR = false, prevVal = 0;
+                        if (m.kind === "weight" && m.value > prev.e1rm)   { isPR = true; prevVal = prev.e1rm;   prev.e1rm   = m.value; }
+                        if (m.kind === "bw"     && m.value > prev.bwReps) { isPR = true; prevVal = prev.bwReps; prev.bwReps = m.value; }
+                        if (isPR) {
                           prTriggeredRef.current.add(s.id);
-                          prevBestsRef.current[item.exId] = prm;
-                          setActivePR({ exId: item.exId, exName: mergedNames[item.exId] || item.exId, rm: prm, prev, weight: s.weight, reps: s.reps });
+                          prevBestsRef.current[item.exId] = prev;
+                          setActivePR({ exId: item.exId, exName: mergedNames[item.exId] || item.exId, kind: m.kind, value: m.value, prev: prevVal, weight: s.weight, reps: s.reps });
                         }
                       }
                     }
@@ -1930,10 +1962,10 @@ function PRCelebration({ pr, onClose }) {
         <div style={{fontSize:64,marginBottom:12,animation:"prTrophyBounce 0.8s ease-out"}}>🏆</div>
         <div style={{fontSize:10,letterSpacing:"0.3em",color:C.accent,fontFamily:MONO,fontWeight:700,marginBottom:8}}>NEW PERSONAL RECORD</div>
         <div style={{fontSize:18,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:24}}>{pr.exName}</div>
-        <div style={{fontSize:64,fontWeight:900,color:C.accent,fontFamily:MONO,lineHeight:1,textShadow:"0 0 32px rgba(255,107,53,0.6)",marginBottom:6}}>{pr.rm}</div>
-        <div style={{fontSize:9,letterSpacing:"0.25em",color:C.muted,fontFamily:MONO,marginBottom:18}}>EST 1RM · LBS</div>
+        <div style={{fontSize:64,fontWeight:900,color:C.accent,fontFamily:MONO,lineHeight:1,textShadow:"0 0 32px rgba(255,107,53,0.6)",marginBottom:6}}>{pr.kind==="bw" ? pr.value : (pr.value ?? pr.rm)}</div>
+        <div style={{fontSize:9,letterSpacing:"0.25em",color:C.muted,fontFamily:MONO,marginBottom:18}}>{pr.kind==="bw" ? "REPS · BODYWEIGHT" : "EST 1RM · LBS"}</div>
         <div style={{fontSize:12,color:C.muted,fontFamily:MONO,marginBottom:24}}>
-          {pr.weight} lbs × {pr.reps} reps
+          {pr.kind==="bw" ? <>BW × {pr.reps} reps</> : <>{pr.weight} lbs × {pr.reps} reps</>}
           {pr.prev > 0 ? <span style={{color:C.dim}}> · up from {pr.prev}</span> : <span style={{color:C.dim}}> · first PR</span>}
         </div>
         <button onClick={onClose} style={{background:C.accent,border:"none",borderRadius:10,color:"#000",padding:"14px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}>Keep Going →</button>
@@ -2090,24 +2122,29 @@ function computeObservations({ history, dietLog, activeLog, focusSessions, goals
   const redDays = thisWeekDays.filter(d => dietLog[d]==="red").length;
   if (redDays > G.dietRed) obs.push(`Cheat days over cap: ${redDays} (max ${G.dietRed}).`);
 
-  // PR check on latest workout
+  // PR check on latest workout — weighted PRs by e1RM, bodyweight PRs by reps.
   const latest = history[0];
   if (latest) {
-    const priors = bestRMByExercise(history.slice(1), latest.id);
+    const priors = bestByExercise(history.slice(1), latest.id);
     for (const ex of latest.exercises) {
       const meta = EX_META[ex.exId];
       if (meta?.cat === "Cardio") continue;
-      let best = 0;
+      let bestE1 = 0, bestBW = 0;
       for (const s of ex.sets) {
         if (!s.done) continue;
-        const rm = e1RM(parseFloat(s.weight), parseInt(s.reps));
-        if (rm > best) best = rm;
+        const m = setMetric(s);
+        if (m.kind === "weight" && m.value > bestE1) bestE1 = m.value;
+        if (m.kind === "bw"     && m.value > bestBW) bestBW = m.value;
       }
-      const prev = priors[ex.exId] || 0;
-      if (best > 0 && best > prev) {
-        const name = EXERCISES[ex.exId] || ex.exId;
-        obs.push(`New PR on ${isoDate(new Date(latest.date))}: ${name} ${best} e1RM (prev ${prev || "none"}).`);
-        break; // one PR mention per latest workout
+      const prev = priors[ex.exId] || { e1rm: 0, bwReps: 0 };
+      const name = EXERCISES[ex.exId] || ex.exId;
+      if (bestE1 > 0 && bestE1 > prev.e1rm) {
+        obs.push(`New PR on ${isoDate(new Date(latest.date))}: ${name} ${bestE1} e1RM (prev ${prev.e1rm || "none"}).`);
+        break;
+      }
+      if (bestBW > 0 && bestBW > prev.bwReps) {
+        obs.push(`New BW PR on ${isoDate(new Date(latest.date))}: ${name} BW × ${bestBW} reps (prev ${prev.bwReps || "none"}).`);
+        break;
       }
     }
   }
@@ -3004,7 +3041,7 @@ export default function App() {
       const reps = parseInt(ex.reps) || 0;
       const weight = ex.weight != null ? Number(ex.weight) : 0;
       const sets = Array.from({length: setCount}, () => ({
-        id: uid(), weight: String(weight || ""), reps: String(reps || ""), done: true,
+        id: uid(), weight: weight === 0 ? "0" : String(weight || ""), reps: String(reps || ""), done: true,
       }));
       return { id: uid(), exId: ex.ex_id, sets, notes: "" };
     });
@@ -3161,10 +3198,13 @@ export default function App() {
           {completedWk.exercises.map(item=>{
             const exVol=item.sets.reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
             const maxW=item.sets.reduce((a,s)=>Math.max(a,parseFloat(s.weight)||0),0);
+            const doneSets=item.sets.filter(s=>s.done);
+            const bwRepsMax=doneSets.reduce((b,s)=>Math.max(b, isBwSet(s) ? parseInt(s.reps) : 0),0);
+            const maxLabel = maxW>0 ? `max ${maxW} lbs` : (bwRepsMax>0 ? `max BW × ${bwRepsMax}` : "—");
             return(
               <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",marginBottom:8}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:C.text,fontFamily:MONO}}>{EXERCISES[item.exId]||customExercises[item.exId]?.name||item.exId}</span><span style={{fontSize:12,color:C.accent,fontFamily:MONO}}>{exVol>0?`${exVol.toLocaleString()} lbs`:""}</span></div>
-                <div style={{fontSize:11,color:C.muted,fontFamily:MONO}}>{item.sets.filter(s=>s.done).length} sets · max {maxW} lbs</div>
+                <div style={{fontSize:11,color:C.muted,fontFamily:MONO}}>{doneSets.length} sets · {maxLabel}</div>
               </div>
             );
           })}
