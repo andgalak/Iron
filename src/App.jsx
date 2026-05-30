@@ -2951,6 +2951,12 @@ function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, o
           {/* Data */}
           <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",margin:"22px 0 10px",fontWeight:700}}>DATA</div>
           <button onClick={onClearAll} style={{background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Clear all data</button>
+
+          {/* Build version — so you can verify the app picked up the latest deploy */}
+          <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:24,paddingTop:14,borderTop:`1px solid ${C.border}`,lineHeight:1.6,letterSpacing:"0.05em"}}>
+            BUILD <span style={{color:C.sub}}>{(typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev").slice(0,16).replace("T"," ")} UTC</span>
+            <div style={{marginTop:4}}>If the build time isn't recent, the iPhone app is on a cached version — fully close it (swipe up) and reopen, or remove from the home screen and re-add from Safari.</div>
+          </div>
         </div>
       </div>
     </div>
