@@ -686,20 +686,8 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
 }
 
 // ─── IRON TAB ─────────────────────────────────────────────────────────────────
-function IronTab({ history, dietLog, activeLog, zone2Log = [], goalLogs = [], customExercises = {}, goals = DEFAULT_GOAL_LIST, onUpdateDiet, onUpdateActive, onStartWorkout, onOpenEdit, onToggleGoal, onSetGoalMinutes, onAddZone2, onEditGoals }) {
-  const today = isoDate();
-  const thisWeekDays = getWeekDays(0);
+function IronTab({ history, onStartWorkout }) {
   const wkWorkouts = thisWeekCount(history);
-  const activeGoals = (Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST).map(normalizeGoal).filter(g => g.active !== false);
-  const goalProgresses = activeGoals.map(g => ({ goal: g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, goalLogs, weekDays: thisWeekDays, customExercises }) }));
-  const goalsHit = goalProgresses.filter(x => x.p.hit).length;
-  const [minsEditGoal, setMinsEditGoal] = useState(null);
-  const [minsInput, setMinsInput] = useState("");
-
-  function formatElapsed(s){ return formatTime(s); }
-  function totalVol(exs){ return exs.reduce((a,ex)=>a+ex.sets.reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0); }
-  function compSets(exs){ return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).length,0); }
-  function dayLabel(iso){ const d=new Date(iso); if(isNaN(d.getTime()))return"Unknown date"; const a=new Date(d);a.setHours(0,0,0,0); const b=new Date();b.setHours(0,0,0,0); const diff=Math.round((b-a)/86400000); if(diff===0)return"Today"; if(diff===1)return"Yesterday"; if(diff>1&&diff<7)return d.toLocaleDateString("en-US",{weekday:"short"}); return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
 
   const PROGRAMS = [
     { id:"ppl", name:"Push Pull Legs", tag:"PPL · 3×/week", days:[
@@ -718,97 +706,12 @@ function IronTab({ history, dietLog, activeLog, zone2Log = [], goalLogs = [], cu
   return (
     <div style={{padding:"16px 16px 80px"}}>
 
-      {/* YOUR GOALS — the execution surface: do each goal for today */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",fontWeight:700}}>YOUR GOALS</div>
-        <span style={{fontSize:11,fontFamily:MONO,fontWeight:700,color:(activeGoals.length>0&&goalsHit===activeGoals.length)?C.green:C.sub}}>{goalsHit}/{activeGoals.length} hit this week</span>
+      {/* Header */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:11,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4}}>TRAIN</div>
+        <div style={{fontSize:22,fontWeight:700,color:C.text,fontFamily:MONO,lineHeight:1.1}}>Workouts</div>
+        <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>Start a session, pick a program, or scroll down to backfill a past day.</div>
       </div>
-
-      {activeGoals.length === 0 ? (
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"20px 16px",marginBottom:18,textAlign:"center"}}>
-          <div style={{fontSize:12,color:C.muted,fontFamily:MONO,lineHeight:1.6,marginBottom:14}}>Add your first goal — workouts, habits, skills, anything you want to build consistently.</div>
-          {onEditGoals && <button onClick={onEditGoals} style={{background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"10px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>+ Add a goal</button>}
-        </div>
-      ) : (
-        <div style={{marginBottom:18}}>
-          {goalProgresses.map(({goal, p}) => {
-            const over = p.type==="max" && p.got > p.target;
-            const color = p.hit ? C.green : over ? C.red : goal.color;
-            const pct = Math.min(p.got/Math.max(p.target,1),1)*100;
-            const tgt = p.type==="max" ? `≤${p.target}${p.unit}` : `${p.target}${p.unit}`;
-
-            // Per-type action for TODAY
-            let action = null;
-            if (goal.type === "workout") {
-              action = (
-                <div style={{display:"flex",justifyContent:"flex-end"}}>
-                  <button onClick={()=>onStartWorkout([], goal.label || "Workout")} style={{background:goal.color+"1a",border:`1px solid ${goal.color}`,borderRadius:8,color:goal.color,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Start →</button>
-                </div>
-              );
-            } else if (goal.kind === "diet_green" || goal.kind === "diet_red") {
-              action = <TrafficLight config={DIET_CONFIG} value={dietLog[today]} onChange={v=>onUpdateDiet(today,v)} size="sm"/>;
-            } else if (goal.kind === "active_green") {
-              action = <TrafficLight config={ACTIVE_CONFIG} value={activeLog[today]} onChange={v=>onUpdateActive(today,v)} size="sm"/>;
-            } else if (goal.kind === "habit") {
-              const todayDone = goalLogs.some(l => l.goal_id===goal.id && l.date===today && l.completed);
-              action = (
-                <button onClick={()=>onToggleGoal && onToggleGoal(goal.id)} style={{width:"100%",background:todayDone?goal.color+"22":"transparent",border:`1px solid ${todayDone?goal.color:C.border2}`,borderRadius:8,color:todayDone?goal.color:C.sub,padding:"9px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>
-                  {todayDone ? "✓ Done today" : "Mark done today"}
-                </button>
-              );
-            } else if (goal.type === "timed") {
-              const editing = minsEditGoal === goal.id;
-              const todayMins = goal.kind === "zone2"
-                ? zone2Log.filter(z => z.date===today).reduce((a,z)=>a+(z.minutes||0),0)
-                : (goalLogs.find(l => l.goal_id===goal.id && l.date===today)?.value || 0);
-              const submit = (m) => {
-                const mins = parseInt(m) || 0;
-                if (goal.kind === "zone2") { if (mins > 0 && onAddZone2) onAddZone2(today, mins, goal.label || "Zone 2"); }
-                else if (onSetGoalMinutes) { onSetGoalMinutes(goal.id, mins); }
-                setMinsEditGoal(null);
-              };
-              action = editing ? (
-                <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <input autoFocus type="number" inputMode="numeric" value={minsInput} placeholder="min"
-                    onChange={e=>setMinsInput(e.target.value)}
-                    onKeyDown={e=>{ if(e.key==="Enter") submit(minsInput); if(e.key==="Escape") setMinsEditGoal(null); }}
-                    style={{width:64,background:"#1a1a1a",border:`1px solid ${goal.color}`,borderRadius:8,color:C.text,padding:"8px 6px",fontSize:13,fontFamily:MONO,textAlign:"center",outline:"none"}}/>
-                  <button onClick={()=>submit(minsInput)} style={{flex:1,background:goal.color,color:"#000",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>{goal.kind==="zone2"?"Add":"Save"}</button>
-                  <button onClick={()=>setMinsEditGoal(null)} style={{background:"transparent",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:MONO}}>✕</button>
-                </div>
-              ) : (
-                <button onClick={()=>{setMinsEditGoal(goal.id); setMinsInput("");}} style={{width:"100%",background:todayMins?goal.color+"1a":"transparent",border:`1px solid ${todayMins?goal.color:C.border2}`,borderRadius:8,color:todayMins?goal.color:C.sub,padding:"9px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>
-                  {todayMins ? `${todayMins} min logged today · add more` : (goal.kind==="zone2" ? "+ Log Zone 2 (e.g. 20 min bike)" : "+ Log minutes today")}
-                </button>
-              );
-            }
-
-            return (
-              <div key={goal.id} style={{background:C.card,border:`1px solid ${p.hit?C.green+"55":C.border}`,borderRadius:14,padding:"13px 14px",marginBottom:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:8}}>
-                  <span style={{fontSize:13,color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-                    <span style={{fontSize:16}}>{goal.emoji}</span>
-                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.label}</span>
-                  </span>
-                  <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,flexShrink:0,color:p.hit?color:over?C.red:C.sub}}>
-                    {p.got}<span style={{color:C.dim,fontWeight:400}}>/{tgt}</span>{p.hit?" ✓":""}
-                  </span>
-                </div>
-                <div style={{height:8,background:"#0d0d0d",borderRadius:5,overflow:"hidden",border:`1px solid ${C.border}`,marginBottom:11}}>
-                  <div style={{height:"100%",width:`${pct}%`,borderRadius:4,background:`linear-gradient(90deg, ${color}bb, ${color})`,boxShadow:p.hit?`0 0 10px ${color}99`:"none",transition:"width 0.6s cubic-bezier(0.2,0.8,0.3,1)"}}/>
-                </div>
-                {action}
-              </div>
-            );
-          })}
-          {onEditGoals && (
-            <button onClick={onEditGoals} style={{width:"100%",background:"transparent",border:`1px dashed ${C.accent}`,borderRadius:10,color:C.accent,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}>+ Add a goal</button>
-          )}
-        </div>
-      )}
-
-      {/* TRAIN — workout launcher */}
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:10,fontWeight:700}}>TRAIN</div>
 
       {/* Stats strip */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
@@ -3303,7 +3206,7 @@ export default function App() {
       <div style={{paddingBottom:80}}>
         {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
-          <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} goals={goalList} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onEditGoals={()=>setShowGoalsEditor(true)}/>
+          <IronTab  history={history} onStartWorkout={startWorkout}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks}/>}
