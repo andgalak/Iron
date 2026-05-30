@@ -5,6 +5,24 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase, supabaseConfigured } from "./supabase";
 
+// Surface a clear one-time alert when a Supabase write fails because the table
+// (or a column) doesn't exist yet — that's almost always "user hasn't run the
+// latest schema.sql". Without this, optimistic UI updates make it look saved
+// and the user only finds out on refresh.
+let _schemaWarned = false;
+function warnIfSchemaMissing(error, label) {
+  if (!error || _schemaWarned) return;
+  const msg = String(error.message || error.code || "");
+  const isMissing = error.code === "42P01" /* undefined_table */ || error.code === "PGRST205" || /does not exist|relation.*not exist|schema cache/i.test(msg);
+  if (!isMissing) return;
+  _schemaWarned = true;
+  alert(
+    `Couldn't save ${label}: the database table is missing.\n\n` +
+    `Open Supabase Dashboard → SQL Editor → paste in the latest supabase/schema.sql → Run.\n\n` +
+    `Then refresh the app.\n\nDetails: ${msg}`
+  );
+}
+
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 export function useAuth() {
   const [user, setUser] = useState(null);
@@ -464,29 +482,32 @@ export function useGoalLogs(userId) {
   // Toggle a binary habit completion for a date
   async function toggle(goalId, date) {
     const existing = data.find(g => g.goal_id === goalId && g.date === date);
+    const prev = data;
     if (existing) {
       setData(d => d.filter(g => !(g.goal_id === goalId && g.date === date)));
       const { error } = await supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date);
-      if (error) console.error("goal_log delete:", error);
+      if (error) { console.error("goal_log delete:", error); setData(prev); warnIfSchemaMissing(error, "habit progress"); }
     } else {
       const row = { user_id: userId, goal_id: goalId, date, completed: true, value: null };
       setData(d => [...d, row]);
-      const { error } = await supabase.from("goal_logs").upsert(row);
-      if (error) console.error("goal_log upsert:", error);
+      const { error } = await supabase.from("goal_logs").upsert(row, { onConflict: "user_id,goal_id,date" });
+      if (error) { console.error("goal_log upsert:", error); setData(prev); warnIfSchemaMissing(error, "habit progress"); }
     }
   }
 
   // Set minutes for a timed goal on a date (null/0 clears)
   async function setValue(goalId, date, minutes) {
+    const prev = data;
     if (!minutes || minutes <= 0) {
       setData(d => d.filter(g => !(g.goal_id === goalId && g.date === date)));
-      await supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date);
+      const { error } = await supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date);
+      if (error) { console.error("goal_log delete:", error); setData(prev); warnIfSchemaMissing(error, "timed goal minutes"); }
       return;
     }
     const row = { user_id: userId, goal_id: goalId, date, completed: true, value: minutes };
     setData(d => { const o = d.filter(g => !(g.goal_id===goalId && g.date===date)); return [...o, row]; });
-    const { error } = await supabase.from("goal_logs").upsert(row);
-    if (error) console.error("goal_log value:", error);
+    const { error } = await supabase.from("goal_logs").upsert(row, { onConflict: "user_id,goal_id,date" });
+    if (error) { console.error("goal_log value:", error); setData(prev); warnIfSchemaMissing(error, "timed goal minutes"); }
   }
 
   return { data, loading, toggle, setValue };
@@ -512,17 +533,19 @@ export function useBodyweight(userId) {
   // Pass an empty/zero/invalid weight to clear that day's entry.
   async function setForDate(date, weight) {
     const w = parseFloat(weight);
+    const prev = data;
     if (!w || w <= 0 || isNaN(w)) {
       setData(d => { const n = { ...d }; delete n[date]; return n; });
       const { error } = await supabase.from("bodyweight_log").delete().eq("user_id", userId).eq("date", date);
-      if (error) console.error("bodyweight delete:", error);
+      if (error) { console.error("bodyweight delete:", error); setData(prev); warnIfSchemaMissing(error, "body weight"); }
       return;
     }
     setData(d => ({ ...d, [date]: w }));
-    const { error } = await supabase.from("bodyweight_log").upsert({
-      user_id: userId, date, weight: w, updated_at: new Date().toISOString(),
-    });
-    if (error) console.error("bodyweight upsert:", error);
+    const { error } = await supabase.from("bodyweight_log").upsert(
+      { user_id: userId, date, weight: w, updated_at: new Date().toISOString() },
+      { onConflict: "user_id,date" }
+    );
+    if (error) { console.error("bodyweight upsert:", error); setData(prev); warnIfSchemaMissing(error, "body weight"); }
   }
 
   return { data, loading, setForDate };
