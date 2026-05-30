@@ -1847,7 +1847,16 @@ function WorkoutScreen({
                         }
                       }
                     }
-                    const sets=[...item.sets];sets[si]={...s,done:newDone};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
+                    const sets=[...item.sets];sets[si]={...s,done:newDone};
+                    // Auto-fill the next empty set with this set's weight + reps
+                    // so 4 same-as-last sets becomes zero typing.
+                    if (newDone && s.weight && s.reps) {
+                      const next = sets[si+1];
+                      if (next && !next.weight && !next.reps && !next.done) {
+                        sets[si+1] = { ...next, weight: s.weight, reps: s.reps };
+                      }
+                    }
+                    setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
                   }}>
                     <svg width="26" height="26" viewBox="0 0 24 24" style={{display:"block"}}>
                       <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={s.done?C.accent:"transparent"} stroke={s.done?C.accent:C.muted} strokeWidth="2" style={{transition:s.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
@@ -1858,7 +1867,21 @@ function WorkoutScreen({
                 </div>
                 );
               })}
-              <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border}`,borderRadius:8,color:C.dim,padding:"7px",fontSize:11,cursor:"pointer",marginTop:4,fontFamily:MONO}} onClick={()=>{ const sets=[...item.sets,{id:uid(),weight:"",reps:"",done:false}]; setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex)); }}>+ Add Set</button>
+              {(() => {
+                // "+ Add Set" pre-fills weight + reps from the most recent
+                // completed set in this exercise (or the last filled set if none
+                // are checked off yet) so logging same-as-last is one tap.
+                const lastDone = [...item.sets].reverse().find(x => x.done && x.weight && x.reps);
+                const lastFilled = lastDone || [...item.sets].reverse().find(x => x.weight && x.reps);
+                const tpl = lastFilled ? { weight: lastFilled.weight, reps: lastFilled.reps } : { weight: "", reps: "" };
+                const label = lastFilled
+                  ? `+ Add set · ${parseFloat(lastFilled.weight)===0?"BW":`${lastFilled.weight} lbs`} × ${lastFilled.reps}`
+                  : "+ Add Set";
+                return (
+                  <button style={{width:"100%",background:"transparent",border:`1px dashed ${lastFilled?C.accent+"55":C.border}`,borderRadius:8,color:lastFilled?C.accent:C.dim,padding:"8px",fontSize:11,cursor:"pointer",marginTop:4,fontFamily:MONO,letterSpacing:"0.02em"}}
+                    onClick={()=>{ const sets=[...item.sets,{id:uid(),...tpl,done:false}]; setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex)); }}>{label}</button>
+                );
+              })()}
             </div>
           );
         })}
