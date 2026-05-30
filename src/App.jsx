@@ -1816,15 +1816,22 @@ function WorkoutScreen({
                   <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="decimal" placeholder={lastRef?lastRef.weight:"lbs"} value={s.weight} onChange={e=>{const sets=[...item.sets];sets[si]={...s,weight:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
                   <span style={{color:C.dim,fontSize:12}}>×</span>
                   <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="numeric" placeholder={lastRef?lastRef.reps:"reps"} value={s.reps} onChange={e=>{const sets=[...item.sets];sets[si]={...s,reps:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
-                  {/* middle slot: copy-last-set | e1RM | spacer */}
+                  {/* middle slot: copy-from-above (when row is empty) OR
+                      duplicate-this-set-below (when row has data). Always-visible
+                      so duplicating a set is one tap. */}
                   {showCopy ? (
                     <button aria-label="Copy weight and reps from last completed set" title="Copy last set"
                       onClick={()=>{const sets=[...item.sets];sets[si]={...s,weight:lastCompletedAbove.weight,reps:lastCompletedAbove.reps};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}
                       style={{width:40,height:36,flexShrink:0,background:"transparent",border:`1px solid ${C.border2}`,borderRadius:7,color:C.sub,fontSize:9,fontFamily:MONO,cursor:"pointer",letterSpacing:"0.02em",lineHeight:1.1}}>⧉ copy</button>
-                  ) : rm>0 ? (
-                    <span style={{fontSize:10,color:C.sub,fontFamily:MONO,width:40,textAlign:"center",flexShrink:0}}>{rm}</span>
-                  ) : bwReps>0 ? (
-                    <span style={{fontSize:9,color:C.purple,fontFamily:MONO,width:40,textAlign:"center",flexShrink:0,letterSpacing:"0.05em"}}>BW</span>
+                  ) : (s.weight && s.reps) ? (
+                    <button aria-label="Duplicate this set below" title="Duplicate this set"
+                      onClick={()=>{
+                        const newSet = { id: uid(), weight: s.weight, reps: s.reps, done: false };
+                        const sets = [...item.sets.slice(0, si+1), newSet, ...item.sets.slice(si+1)];
+                        setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
+                      }}
+                      style={{width:40,height:36,flexShrink:0,background:`${C.accent}15`,border:`1px solid ${C.accent}80`,borderRadius:7,color:C.accent,fontSize:14,fontFamily:MONO,cursor:"pointer",lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}}
+                      title={rm>0?`Dup · ${rm} e1RM`:bwReps>0?`Dup · BW × ${bwReps}`:"Duplicate set"}>⧉</button>
                   ) : (
                     <span style={{width:40,flexShrink:0}}/>
                   )}
