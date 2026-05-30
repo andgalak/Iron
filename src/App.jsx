@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import {
   DndContext, DragOverlay, closestCorners,
   MouseSensor, TouchSensor, useSensor, useSensors, useDroppable,
@@ -1214,107 +1214,260 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   );
 }
 
-// ─── PROGRESS TAB ─────────────────────────────────────────────────────────────
-function ProgressTab({ history, dietLog, activeLog, focusSessions, onClearAll }) {
-  const WEEKS = 8;
-  const now = new Date();
-  const weeks = Array.from({length:WEEKS},(_,i)=>{
-    const ws=new Date(now); ws.setDate(now.getDate()-(WEEKS-1-i)*7);
-    const we=new Date(ws); we.setDate(ws.getDate()+7);
-    const label=ws.toLocaleDateString("en-US",{month:"short",day:"numeric"});
-    const wDays=Array.from({length:7},(_,j)=>{const d=new Date(ws);d.setDate(ws.getDate()+j);return isoDate(d);});
-    const workouts=history.filter(w=>{const d=new Date(w.date);return d>=ws&&d<we;}).length;
-    const dg=wDays.filter(d=>dietLog[d]==="green").length;
-    const dr=wDays.filter(d=>dietLog[d]==="red").length;
-    const ag=wDays.filter(d=>activeLog[d]==="green").length;
-    const focusMins=focusSessions.filter(s=>wDays.includes(s.date)).reduce((a,s)=>a+s.mins,0);
-    return {label,workouts,dg,dr,ag,focusMins};
+// ─── TRENDS TAB ───────────────────────────────────────────────────────────────
+function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions = [], bodyweight = {}, goals = [], goalLogs = [], customExercises = {} }) {
+  const today = isoDate();
+  const WEEKS_BACK = 8;
+  const HEATMAP_WEEKS = 12;
+
+  const weeks = Array.from({length:WEEKS_BACK},(_,i)=>{
+    const days = getWeekDays(-(WEEKS_BACK-1-i));
+    const ws = new Date(days[0]+"T12:00:00");
+    return { days, label: ws.toLocaleDateString("en-US",{month:"short",day:"numeric"}) };
+  });
+  const wkSet = workoutDateSet(history);
+
+  // Per-week aggregate metrics
+  const metrics = weeks.map(({days, label}) => {
+    const wkDays = new Set(days);
+    const workoutDays = new Set();
+    for (const w of history) { const d = isoDate(new Date(w.date)); if (wkDays.has(d)) workoutDays.add(d); }
+    return {
+      label, days,
+      workouts: workoutDays.size,
+      dg: days.filter(d=>dietLog[d]==="green").length,
+      ag: days.filter(d=>activeLog[d]==="green").length,
+      z2: zone2Log.filter(z=>wkDays.has(z.date)).reduce((a,z)=>a+(z.minutes||0),0),
+      fm: focusSessions.filter(s=>wkDays.has(s.date)).reduce((a,s)=>a+(s.mins||0),0),
+    };
   });
 
-  const maxW=Math.max(...weeks.map(w=>w.workouts),1);
-  const maxF=Math.max(...weeks.map(w=>w.focusMins),1);
+  // Active normalized goals; weekly goal-hit % derived from computeGoalProgress
+  const goalListNorm = (Array.isArray(goals)?goals:[]).map(normalizeGoal).filter(g=>g.active!==false);
+  const weeklyGoalPct = weeks.map(({days})=>{
+    if (goalListNorm.length === 0) return 0;
+    const ctx = { history, dietLog, activeLog, zone2Log, goalLogs, weekDays: days, customExercises };
+    const hit = goalListNorm.filter(g => computeGoalProgress(g, ctx).hit).length;
+    return Math.round((hit / goalListNorm.length) * 100);
+  });
+  const targetByKind = {};
+  goalListNorm.forEach(g => { if (targetByKind[g.kind] == null) targetByKind[g.kind] = g.target; });
 
-  const thisWeekDays=getWeekDays(0);
-  const twW=thisWeekCount(history);
-  const twDG=thisWeekDays.filter(d=>dietLog[d]==="green").length;
-  const twDR=thisWeekDays.filter(d=>dietLog[d]==="red").length;
-  const twAG=thisWeekDays.filter(d=>activeLog[d]==="green").length;
-  const twFocus=focusSessions.filter(s=>thisWeekDays.includes(s.date)).reduce((a,s)=>a+s.mins,0);
+  // Body weight series — last 90 days, indexed by day-offset
+  const bwSeries = (() => {
+    const out = [];
+    for (let i = 89; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const iso = isoDate(d);
+      out.push({ date: iso, w: bodyweight[iso] != null ? Number(bodyweight[iso]) : null });
+    }
+    return out;
+  })();
+  const wtLogged = bwSeries.map((p,i)=>({...p,i})).filter(p=>p.w!=null);
+  const wtCurrent = wtLogged.length ? wtLogged[wtLogged.length-1].w : null;
+  const wt30Ref = (() => {
+    for (let i = 60; i < bwSeries.length; i++) if (bwSeries[i].w != null) return bwSeries[i].w;
+    return null;
+  })();
+  const wt90Ref = wtLogged.length ? wtLogged[0].w : null;
+  const wt30Delta = wtCurrent != null && wt30Ref != null ? +(wtCurrent - wt30Ref).toFixed(1) : null;
+  const wt90Delta = wtCurrent != null && wt90Ref != null ? +(wtCurrent - wt90Ref).toFixed(1) : null;
 
-  function MiniChart({data,max,color,height=60}){
-    return(
-      <div style={{display:"flex",alignItems:"flex-end",gap:4,height}}>
-        {data.map((v,i)=>{
-          const h=Math.max((v/Math.max(max,1))*height*0.85,v>0?4:2);
-          const hit=v>=4;
-          return <div key={i} style={{flex:1,height:h,background:hit?color:v>0?C.border2:C.border,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}}/>;
+  // Body weight chart SVG (compact line chart)
+  let wtSvg = null;
+  if (wtLogged.length >= 1) {
+    const pad = { l: 34, r: 10, t: 12, b: 22 };
+    const W = 320, H = 140;
+    const innerW = W - pad.l - pad.r;
+    const innerH = H - pad.t - pad.b;
+    const wMin = Math.min(...wtLogged.map(p=>p.w));
+    const wMax = Math.max(...wtLogged.map(p=>p.w));
+    const range = Math.max(wMax - wMin, 2);
+    const yLo = wMin - range * 0.15;
+    const yHi = wMax + range * 0.15;
+    const xFor = (i) => pad.l + (i/89)*innerW;
+    const yFor = (w) => pad.t + (1 - (w - yLo)/(yHi - yLo)) * innerH;
+    const pointsStr = wtLogged.map(p=>`${xFor(p.i).toFixed(1)},${yFor(p.w).toFixed(1)}`).join(" ");
+    const ticks = [yHi, (yHi+yLo)/2, yLo];
+    wtSvg = (
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{display:"block"}}>
+        {ticks.map((v,idx)=>{
+          const y = yFor(v);
+          return <Fragment key={idx}>
+            <line x1={pad.l} x2={W-pad.r} y1={y} y2={y} stroke={C.border} strokeDasharray="2 3"/>
+            <text x={pad.l-5} y={y+3} textAnchor="end" fontSize="9" fill={C.muted} fontFamily={MONO}>{v.toFixed(0)}</text>
+          </Fragment>;
         })}
-      </div>
+        <text x={pad.l} y={H-6} fontSize="9" fill={C.dim} fontFamily={MONO}>90d ago</text>
+        <text x={W-pad.r} y={H-6} fontSize="9" fill={C.dim} fontFamily={MONO} textAnchor="end">Today</text>
+        {wtLogged.length>=2 && <polyline points={pointsStr} fill="none" stroke={C.blue} strokeWidth="2" strokeLinejoin="round"/>}
+        {wtLogged.map((p,idx)=><circle key={idx} cx={xFor(p.i)} cy={yFor(p.w)} r="2.4" fill={C.blue}/>)}
+      </svg>
     );
   }
 
-  return(
-    <div style={{padding:"16px 16px 80px"}}>
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>THIS WEEK</div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
-        <ScoreCard label="WORKOUTS"  value={`${twW}/${WEEKLY_GOALS.workouts}`}   color={twW>=WEEKLY_GOALS.workouts?C.accent:C.text}/>
-        <ScoreCard label="DIET 🟢"   value={`${twDG}/${WEEKLY_GOALS.dietGreen}`} color={twDG>=WEEKLY_GOALS.dietGreen?C.green:C.text}/>
-        <ScoreCard label="ACTIVE 🟢" value={`${twAG}/${WEEKLY_GOALS.activeGreen}`} color={twAG>=WEEKLY_GOALS.activeGreen?C.green:C.text}/>
-        <ScoreCard label="FOCUS HRS" value={twFocus>0?`${Math.round(twFocus/60*10)/10}h`:"—"} color={C.blue}/>
-        <ScoreCard label="DIET 🔴"   value={`${twDR}/≤${WEEKLY_GOALS.dietRed}`} color={twDR<=WEEKLY_GOALS.dietRed?C.green:C.red}/>
-      </div>
+  // Heatmap weeks (oldest at top, current at bottom)
+  const heatmapWeeks = Array.from({length:HEATMAP_WEEKS},(_,i)=>getWeekDays(-(HEATMAP_WEEKS-1-i)));
+  function dayScore(d) {
+    if (d > today) return -1;                              // future
+    const w  = wkSet.has(d) ? 1 : 0;
+    const dt = dietLog[d]==="green" ? 1 : 0;
+    const ac = activeLog[d]==="green" ? 1 : 0;
+    const score = w + dt + ac;
+    if (score > 0) return score;                           // 1..3
+    if (dietLog[d] === "red") return -2;                   // red diet only
+    return 0;                                              // empty
+  }
+  function cellColor(score) {
+    if (score === -1) return "transparent";
+    if (score === -2) return C.red + "55";
+    if (score === 0)  return C.border;
+    if (score === 1)  return C.accent + "33";
+    if (score === 2)  return C.accent + "88";
+    if (score === 3)  return C.green;
+    return C.border;
+  }
 
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>8-WEEK TRENDS</div>
-
-      {[
-        {label:"WORKOUTS / WEEK", data:weeks.map(w=>w.workouts), max:maxW, color:C.accent},
-        {label:"CLEAN DIET DAYS", data:weeks.map(w=>w.dg),       max:7,    color:C.green},
-        {label:"ACTIVE DAYS",     data:weeks.map(w=>w.ag),       max:7,    color:C.green},
-      ].map(({label,data,max,color})=>(
-        <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
-          <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>{label}</div>
-          <MiniChart data={data} max={max} color={color}/>
-          <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
-            <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>{weeks[0].label}</span>
-            <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>Now</span>
-          </div>
-        </div>
-      ))}
-
-      {/* Focus hours trend */}
+  // Per-week bar chart card (reused for every metric)
+  function MiniBars({ label, values, max, color, goalLine, format }) {
+    const m = Math.max(max || 1, ...values, 1);
+    const lastVal = values[values.length-1];
+    const fmt = format || (v => v);
+    const H = 48;
+    return (
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>FOCUS HOURS / WEEK</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:60}}>
-          {weeks.map((w,i)=>{
-            const h=Math.max((w.focusMins/Math.max(maxF,1))*52,w.focusMins>0?4:2);
-            return <div key={i} style={{flex:1,height:h,background:w.focusMins>=120?C.blue:w.focusMins>0?C.border2:C.border,borderRadius:"3px 3px 0 0",transition:"height 0.4s",title:`${Math.round(w.focusMins/60*10)/10}h`}}/>;
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",fontWeight:700}}>{label}</div>
+          <div style={{fontSize:11,color:C.sub,fontFamily:MONO}}>{fmt(lastVal)} <span style={{color:C.dim}}>this wk</span></div>
+        </div>
+        <div style={{position:"relative",display:"flex",alignItems:"flex-end",gap:4,height:H}}>
+          {values.map((v,i)=>{
+            const h = Math.max((v/m)*(H-6), v>0?4:2);
+            const hit = goalLine != null ? v >= goalLine : v > 0;
+            return <div key={i} style={{flex:1,height:h,background:hit?color:v>0?C.border2:C.border,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}} title={`${weeks[i].label}: ${fmt(v)}`}/>;
           })}
+          {goalLine != null && goalLine > 0 && goalLine <= m && (
+            <div style={{position:"absolute",left:0,right:0,bottom:`${(goalLine/m)*(H-6)}px`,borderTop:`1px dashed ${color}66`,pointerEvents:"none"}}/>
+          )}
         </div>
         <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
           <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>{weeks[0].label}</span>
           <span style={{fontSize:9,color:C.border2,fontFamily:MONO}}>Now</span>
         </div>
       </div>
+    );
+  }
 
-      {/* Diet red days */}
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:10}}>RED DIET DAYS / WEEK</div>
-        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:40}}>
-          {weeks.map((w,i)=>{
-            const h=Math.max((w.dr/3)*36,w.dr>0?4:2);
-            return <div key={i} style={{flex:1,height:h,background:w.dr===0?C.green:w.dr<=1?C.border2:C.red,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}}/>;
-          })}
+  return (
+    <div style={{padding:"16px 16px 80px"}}>
+      {/* Header */}
+      <div style={{marginBottom:18}}>
+        <div style={{fontSize:11,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4}}>OVER TIME</div>
+        <div style={{fontSize:22,fontWeight:700,color:C.text,fontFamily:MONO,lineHeight:1.1}}>Trends</div>
+        <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>How you're trending across the last 8–12 weeks. Body weight comes from the Iron tab's Past days calendar.</div>
+      </div>
+
+      {/* Body weight */}
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:16,marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+          <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",fontWeight:700}}>BODY WEIGHT</div>
+          <div style={{fontSize:10,color:C.muted,fontFamily:MONO}}>last 90 days</div>
+        </div>
+        {wtCurrent != null ? (
+          <>
+            <div style={{display:"flex",alignItems:"baseline",gap:14,marginBottom:10,flexWrap:"wrap"}}>
+              <div style={{fontSize:28,fontWeight:700,color:C.blue,fontFamily:MONO,lineHeight:1}}>{wtCurrent}<span style={{fontSize:13,color:C.muted,fontWeight:400}}> lbs</span></div>
+              {wt30Delta != null && (
+                <div style={{fontSize:11,color:wt30Delta>0?C.red:wt30Delta<0?C.green:C.muted,fontFamily:MONO}}>
+                  {wt30Delta>0?"+":""}{wt30Delta} <span style={{color:C.dim}}>30d</span>
+                </div>
+              )}
+              {wt90Delta != null && wt90Delta !== wt30Delta && (
+                <div style={{fontSize:11,color:wt90Delta>0?C.red:wt90Delta<0?C.green:C.muted,fontFamily:MONO}}>
+                  {wt90Delta>0?"+":""}{wt90Delta} <span style={{color:C.dim}}>90d</span>
+                </div>
+              )}
+            </div>
+            {wtSvg}
+          </>
+        ) : (
+          <div style={{fontSize:11,color:C.muted,fontFamily:MONO,padding:"18px 0",textAlign:"center",lineHeight:1.5}}>
+            Log your weight on the Iron tab's Past days calendar to see the curve.
+          </div>
+        )}
+      </div>
+
+      {/* 8-week trends */}
+      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>8-WEEK TRENDS</div>
+      <MiniBars label="WORKOUT DAYS / WEEK" values={metrics.map(m=>m.workouts)} max={7}  color={C.accent} goalLine={targetByKind.workouts}/>
+      <MiniBars label="CLEAN DIET DAYS"     values={metrics.map(m=>m.dg)}        max={7}  color={C.green}  goalLine={targetByKind.diet_green}/>
+      <MiniBars label="ACTIVE DAYS"         values={metrics.map(m=>m.ag)}        max={7}  color={C.green}  goalLine={targetByKind.active_green}/>
+      <MiniBars label="ZONE 2 / WEEK"       values={metrics.map(m=>m.z2)}        max={Math.max(60,  ...metrics.map(m=>m.z2))} color={C.blue} goalLine={targetByKind.zone2}  format={v=>v?`${v}m`:"—"}/>
+      <MiniBars label="FOCUS HOURS / WEEK"  values={metrics.map(m=>m.fm)}        max={Math.max(120, ...metrics.map(m=>m.fm))} color={C.blue} format={v=>v?`${Math.round(v/60*10)/10}h`:"—"}/>
+      <MiniBars label="GOAL HIT %"          values={weeklyGoalPct}                max={100} color={C.accent} format={v=>`${v}%`}/>
+
+      {/* 12-week heatmap */}
+      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginTop:18,marginBottom:8,fontWeight:700}}>12-WEEK HEATMAP</div>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+        <div style={{display:"grid",gridTemplateColumns:"36px repeat(7, 1fr)",gap:4,alignItems:"center"}}>
+          <div/>
+          {["M","T","W","T","F","S","S"].map((l,i)=><div key={i} style={{textAlign:"center",fontSize:8,color:C.dim,fontFamily:MONO,letterSpacing:"0.05em"}}>{l}</div>)}
+          {heatmapWeeks.map((wk,wi)=>(
+            <Fragment key={wi}>
+              <div style={{fontSize:8,color:C.dim,fontFamily:MONO,textAlign:"right",paddingRight:4}}>{new Date(wk[0]+"T12:00:00").toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}</div>
+              {wk.map((d, di)=>{
+                const score = dayScore(d);
+                const isToday = d === today;
+                return (
+                  <div key={d+di} title={`${d}${score>=1?` · ${score}/3`:score===-2?" · red diet":score===-1?" · future":" · empty"}`}
+                    style={{aspectRatio:"1/1",borderRadius:3,background:cellColor(score),border:isToday?`1.5px solid ${C.accent}`:`1px solid ${C.border}`,minHeight:14}}/>
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:10,marginTop:12,fontSize:9,color:C.muted,fontFamily:MONO,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.green,borderRadius:2,display:"inline-block"}}/>Perfect (3/3)</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.accent+"88",borderRadius:2,display:"inline-block"}}/>Partial</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.red+"55",borderRadius:2,display:"inline-block"}}/>Red diet</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.border,borderRadius:2,display:"inline-block"}}/>Empty</span>
         </div>
       </div>
 
-      {/* Danger zone */}
-      <div style={{marginTop:32,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>DATA</div>
-        <button style={{background:"transparent",border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,padding:"10px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}
-          onClick={onClearAll}>Clear all data</button>
-        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.6}}>Removes workouts, diet, activity, focus, and boards from this browser. Cannot be undone.</div>
-      </div>
-
+      {/* Per-goal weekly history */}
+      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginTop:18,marginBottom:8,fontWeight:700}}>PER-GOAL HISTORY</div>
+      {goalListNorm.length === 0 ? (
+        <div style={{fontSize:11,color:C.muted,fontFamily:MONO,padding:"12px 14px",background:C.card,border:`1px solid ${C.border}`,borderRadius:12}}>
+          Set goals in Settings → Manage goals to see per-goal history.
+        </div>
+      ) : (
+        goalListNorm.map(goal => {
+          const series = weeks.map(({days})=>computeGoalProgress(goal, {history,dietLog,activeLog,zone2Log,goalLogs,weekDays:days,customExercises}));
+          const m = Math.max(...series.map(p=>p.target||1), ...series.map(p=>p.got), 1);
+          const weeksHit = series.filter(p=>p.hit).length;
+          return (
+            <div key={goal.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8,gap:8}}>
+                <div style={{fontSize:12,color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",gap:7,minWidth:0}}>
+                  <span style={{fontSize:14}}>{goal.emoji}</span>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{goal.label || goal.group || goal.kind}</span>
+                </div>
+                <span style={{fontSize:10,color:weeksHit===series.length?C.green:C.muted,fontFamily:MONO,flexShrink:0}}>
+                  {weeksHit}/{series.length} wks hit
+                </span>
+              </div>
+              <div style={{display:"flex",alignItems:"flex-end",gap:4,height:34}}>
+                {series.map((p,i)=>{
+                  const h = Math.max((p.got/m)*30, p.got>0?3:1.5);
+                  const over = goal.kind==="diet_red" && p.got>p.target;
+                  const color = p.hit ? goal.color : (over ? C.red : C.border2);
+                  return <div key={i} style={{flex:1,height:h,background:p.got>0?color:C.border,borderRadius:"3px 3px 0 0",transition:"height 0.4s"}} title={`${weeks[i].label}: ${p.got}/${p.target}${p.unit||""}`}/>;
+                })}
+              </div>
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
@@ -3121,9 +3274,10 @@ export default function App() {
   }
 
   const TABS = [
-    { key:"home",  icon:"🏠",  label:"Home"  },
-    { key:"iron",  icon:"🏋",  label:"Iron"  },
-    { key:"focus", icon:"⬡",  label:"Focus" },
+    { key:"home",   icon:"🏠", label:"Home"   },
+    { key:"iron",   icon:"🏋", label:"Iron"   },
+    { key:"focus",  icon:"⬡",  label:"Focus"  },
+    { key:"trends", icon:"📈", label:"Trends" },
   ];
 
   return (
@@ -3153,6 +3307,7 @@ export default function App() {
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks}/>}
+        {tab==="trends" && <TrendsTab history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} focusSessions={focusSessions} bodyweight={bwState.data} goals={goalList} goalLogs={goalLogs} customExercises={customExercises}/>}
       </div>
 
       {/* Rooney floating button */}
