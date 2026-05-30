@@ -9,7 +9,7 @@ import { supabase, supabaseConfigured } from "./lib/supabase";
 import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
   useFocusSessions, useBoards, useCustomExercises, useRooneyMemories,
-  useZone2Log, useSettings, useRooneyConversation, useGoalLogs, migrateLocalStorage,
+  useZone2Log, useSettings, useRooneyConversation, useGoalLogs, useBodyweight, migrateLocalStorage,
 } from "./lib/supabaseHooks";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -1320,7 +1320,7 @@ function ProgressTab({ history, dietLog, activeLog, focusSessions, onClearAll })
 }
 
 // ─── LOG TAB ──────────────────────────────────────────────────────────────────
-function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLogs = [], onUpdateDiet, onUpdateActive, onAddZone2, onRemoveZone2, onToggleGoal, onSetGoalMinutes, onStartBackfill, onOpenEdit }) {
+function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLogs = [], bodyweight = {}, onUpdateDiet, onUpdateActive, onAddZone2, onRemoveZone2, onToggleGoal, onSetGoalMinutes, onSetBodyweight, onStartBackfill, onOpenEdit }) {
   const [weekOffset, setWeekOffset] = useState(0);
   const days = getWeekDays(weekOffset);
   const today = isoDate();
@@ -1330,6 +1330,9 @@ function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLo
   const [z2Label, setZ2Label] = useState("");
   const [gEdit, setGEdit] = useState(null);  // "goalId|date" of the timed goal being edited
   const [gVal, setGVal] = useState("");
+  const [bwEdit, setBwEdit] = useState(null); // date currently being edited
+  const [bwVal, setBwVal] = useState("");
+  function submitBw(d) { if (onSetBodyweight) onSetBodyweight(d, parseFloat(bwVal)); setBwEdit(null); setBwVal(""); }
 
   // Generic habit + timed goals (the goal_logs-backed ones) that can be backfilled here.
   const habitGoals = (Array.isArray(goals) ? goals : []).map(normalizeGoal)
@@ -1363,7 +1366,7 @@ function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLo
         <div style={{fontSize:11,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:4}}>LOG / EDIT</div>
         <div style={{fontSize:22,fontWeight:700,color:C.text,fontFamily:MONO,lineHeight:1.1}}>Past days</div>
         <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>
-          Set or change diet, activity, workouts, and your habits for any day. Use the arrows to look at older weeks.
+          Set or change diet, activity, body weight, workouts, and your habits for any day. Use the arrows to look at older weeks.
         </div>
       </div>
 
@@ -1424,6 +1427,34 @@ function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLo
                     <TrafficLight config={ACTIVE_CONFIG} value={active} onChange={v=>onUpdateActive(d,v)} size="sm"/>
                   </div>
                 </div>
+
+                {/* Body weight (one entry per day, lbs) */}
+                {(() => {
+                  const bw = bodyweight[d];
+                  const editing = bwEdit === d;
+                  return (
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#161616",border:`1px solid ${bw?C.blue+"55":C.border2}`,borderRadius:8,padding:"8px 10px",marginBottom:12,gap:8}}>
+                      <span style={{fontSize:12,color:C.text,fontFamily:MONO,display:"flex",alignItems:"center",gap:7}}>
+                        <span style={{fontSize:14}}>⚖</span>
+                        <span>Body weight</span>
+                      </span>
+                      {editing ? (
+                        <span style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                          <input autoFocus type="number" inputMode="decimal" step="0.1" value={bwVal} placeholder="lbs"
+                            onChange={e=>setBwVal(e.target.value)}
+                            onKeyDown={e=>{ if(e.key==="Enter") submitBw(d); if(e.key==="Escape"){setBwEdit(null);setBwVal("");} }}
+                            style={{width:70,background:"#1a1a1a",border:`1px solid ${C.blue}`,borderRadius:8,color:C.text,padding:"7px 6px",fontSize:13,fontFamily:MONO,textAlign:"center",outline:"none"}}/>
+                          <button onClick={()=>submitBw(d)} style={{background:C.blue,color:"#000",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Save</button>
+                          <button onClick={()=>{setBwEdit(null);setBwVal("");}} style={{background:"transparent",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:MONO}}>✕</button>
+                        </span>
+                      ) : (
+                        <button onClick={()=>{setBwEdit(d);setBwVal(bw?String(bw):"");}} style={{flexShrink:0,background:"transparent",border:`1px solid ${bw?C.blue:C.border2}`,borderRadius:8,color:bw?C.blue:C.sub,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>
+                          {bw ? `${bw} lbs` : "+ lbs"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:6,letterSpacing:"0.08em"}}>WORKOUTS</div>
                 {wks.map(({w, idx})=>(
@@ -2792,6 +2823,7 @@ export default function App() {
   const settingsState = useSettings(userId, DEFAULT_GOAL_LIST);
   const convoState    = useRooneyConversation(userId);
   const goalLogsState = useGoalLogs(userId);
+  const bwState       = useBodyweight(userId);
 
   // UI state
   const [tab, setTab] = useState("home");
@@ -2898,6 +2930,7 @@ export default function App() {
       supabase.from("custom_exercises").delete().eq("user_id", userId),
       supabase.from("zone2_log").delete().eq("user_id", userId),
       supabase.from("rooney_memories").delete().eq("user_id", userId),
+      supabase.from("bodyweight_log").delete().eq("user_id", userId),
     ]);
     window.location.reload();
   }
@@ -3117,7 +3150,7 @@ export default function App() {
         {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
           <IronTab  history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} goals={goalList} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onStartWorkout={startWorkout} onOpenEdit={openEditWorkout} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onEditGoals={()=>setShowGoalsEditor(true)}/>
-          <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
+          <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks}/>}
       </div>

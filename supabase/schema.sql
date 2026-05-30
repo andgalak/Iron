@@ -247,3 +247,23 @@ create policy "own rows: rooney_conversation"
   on public.rooney_conversation for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- BODY WEIGHT LOG: one weight measurement per day (in lbs).
+-- ────────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.bodyweight_log (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  date date not null,
+  weight numeric(6,2) not null,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, date)
+);
+create index if not exists bodyweight_user_date_idx on public.bodyweight_log (user_id, date desc);
+
+alter table public.bodyweight_log enable row level security;
+drop policy if exists "own rows: bodyweight_log" on public.bodyweight_log;
+create policy "own rows: bodyweight_log"
+  on public.bodyweight_log for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);

@@ -492,6 +492,42 @@ export function useGoalLogs(userId) {
   return { data, loading, toggle, setValue };
 }
 
+// ─── BODY WEIGHT (one measurement per day, in lbs) ────────────────────────────
+export function useBodyweight(userId) {
+  const [data, setData] = useState({}); // { "YYYY-MM-DD": number }
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase.from("bodyweight_log").select("*").eq("user_id", userId)
+      .then(({ data, error }) => {
+        if (error) console.error("bodyweight load:", error);
+        const map = {};
+        (data || []).forEach(r => { map[r.date] = Number(r.weight); });
+        setData(map);
+        setLoading(false);
+      });
+  }, [userId]);
+
+  // Pass an empty/zero/invalid weight to clear that day's entry.
+  async function setForDate(date, weight) {
+    const w = parseFloat(weight);
+    if (!w || w <= 0 || isNaN(w)) {
+      setData(d => { const n = { ...d }; delete n[date]; return n; });
+      const { error } = await supabase.from("bodyweight_log").delete().eq("user_id", userId).eq("date", date);
+      if (error) console.error("bodyweight delete:", error);
+      return;
+    }
+    setData(d => ({ ...d, [date]: w }));
+    const { error } = await supabase.from("bodyweight_log").upsert({
+      user_id: userId, date, weight: w, updated_at: new Date().toISOString(),
+    });
+    if (error) console.error("bodyweight upsert:", error);
+  }
+
+  return { data, loading, setForDate };
+}
+
 // ─── ONE-TIME MIGRATION: localStorage → Supabase ──────────────────────────────
 const MIG_FLAG = "iron_migrated_to_supabase_v1";
 
