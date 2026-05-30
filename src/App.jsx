@@ -1688,7 +1688,7 @@ function WorkoutScreen({
   const [activePR, setActivePR] = useState(null);
   if (prevBestsRef.current === null) prevBestsRef.current = bestByExercise(history, excludeWorkoutId);
   const [exercises, setExercises] = useState(() =>
-    initialBlocks || initExercises.map(id=>({id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}))
+    initialBlocks || initExercises.map(id=>({id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}))
   );
   const [workoutName, setWorkoutName] = useState(initWorkoutName || "Workout");
   const [elapsed, setElapsed] = useState(initialElapsedSec);
@@ -1952,7 +1952,7 @@ function WorkoutScreen({
                       onClick={()=>{
                         if (!newExName.trim() || !onAddCustom) return;
                         const newId = onAddCustom(newExName, newExMuscle, newExCat);
-                        setExercises([...exercises,{id:uid(),exId:newId,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}]);
+                        setExercises([...exercises,{id:uid(),exId:newId,sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}]);
                         setNewExName(""); setCreatingCustom(false); setShowPicker(false);
                       }}>Create + Add</button>
                     <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setCreatingCustom(false);setNewExName("");}}>Cancel</button>
@@ -1966,7 +1966,7 @@ function WorkoutScreen({
                 const isCustom = !!customExercises[id];
                 return (
                   <button key={id} style={{width:"100%",background:"transparent",border:`1px solid ${isCustom?C.purple+"55":C.border}`,borderRadius:10,color:C.text,padding:"11px 14px",marginBottom:6,cursor:"pointer",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}
-                    onClick={()=>{setExercises([...exercises,{id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false},{id:uid(),weight:"",reps:"",done:false}],notes:""}]);setShowPicker(false);}}>
+                    onClick={()=>{setExercises([...exercises,{id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}]);setShowPicker(false);}}>
                     <span style={{fontSize:13,fontFamily:MONO,color:C.text}}>
                       {name}
                       {isCustom && <span style={{fontSize:9,color:C.purple,marginLeft:6,letterSpacing:"0.05em"}}>CUSTOM</span>}
