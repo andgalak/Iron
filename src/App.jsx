@@ -735,10 +735,11 @@ function IronTab({ history, onStartWorkout }) {
         <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>Start a session, pick a program, or scroll down to backfill a past day.</div>
       </div>
 
-      {/* Stats strip */}
+      {/* Stats strip — raw workout counts. The "is this enough?" judgement
+          lives on the Home tab's weekly-goals card and the Trends tab. */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
-        <ScoreCard label="THIS WEEK" value={`${wkWorkouts}/${WEEKLY_GOALS.workouts}`} color={wkWorkouts>=WEEKLY_GOALS.workouts?C.accent:C.text}/>
-        <ScoreCard label="ALL TIME" value={history.length} color={C.text}/>
+        <ScoreCard label="THIS WEEK" value={wkWorkouts} sub={wkWorkouts===1?"workout":"workouts"} color={C.text}/>
+        <ScoreCard label="ALL TIME"  value={history.length} sub={history.length===1?"workout":"workouts"} color={C.text}/>
       </div>
 
       {/* Start workout */}
