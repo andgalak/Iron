@@ -1400,9 +1400,15 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
 // ─── LOG TAB ──────────────────────────────────────────────────────────────────
 function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLogs = [], bodyweight = {}, onUpdateDiet, onUpdateActive, onAddZone2, onRemoveZone2, onToggleGoal, onSetGoalMinutes, onSetBodyweight, onStartBackfill, onOpenEdit }) {
   const [weekOffset, setWeekOffset] = useState(0);
-  const days = getWeekDays(weekOffset);
   const today = isoDate();
-  const DAY_FULL = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  // Order most-recent first: today on top, then yesterday, etc.
+  // Future days (if any in the current week) drop to the bottom.
+  const rawDays = getWeekDays(weekOffset);
+  const days = [
+    ...rawDays.filter(d => d <= today).sort((a, b) => b.localeCompare(a)),
+    ...rawDays.filter(d => d >  today).sort((a, b) => a.localeCompare(b)),
+  ];
+  const labelOfDate = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" });
   const [z2Adding, setZ2Adding] = useState(null); // date being added to
   const [z2Mins, setZ2Mins] = useState("");
   const [z2Label, setZ2Label] = useState("");
@@ -1478,7 +1484,7 @@ function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLo
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
               <div>
                 <div style={{fontSize:13,fontWeight:700,color:isToday?C.accent:C.text,fontFamily:MONO,letterSpacing:"0.05em"}}>
-                  {DAY_FULL[i]}{isToday ? " · TODAY" : ""}
+                  {labelOfDate(d)}{isToday ? " · TODAY" : ""}
                 </div>
                 <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>
                   {new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}
