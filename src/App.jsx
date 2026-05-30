@@ -1692,8 +1692,10 @@ function WorkoutScreen({
   function compSets(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).length,0);}
   function e1RM(w,r){if(!w||!r)return 0;return Math.round(w*(1+r/30));}
   const done=compSets(exercises); const vol=totalVol(exercises);
-  // A set with weight + reps filled counts as logged even if the ○ wasn't tapped.
-  const hasData = exercises.some(ex => ex.sets.some(s => s.weight && s.reps));
+  // A set with reps filled counts as logged (weight is optional — bodyweight
+  // exercises like plank, hanging leg raise, Russian twist have reps only).
+  // This is what lets "Finish" become enabled for an abs-only workout.
+  const hasData = exercises.some(ex => ex.sets.some(s => parseInt(s.reps) > 0));
   const canSave = isLive ? (done > 0 || hasData) : true;
   const [saving, setSaving] = useState(false);
   // Most recent completed set per exercise, for "last time" reference (M-2). history is date-desc.
@@ -1722,7 +1724,12 @@ function WorkoutScreen({
     // Auto-complete any set that has weight + reps but wasn't explicitly ticked.
     const finalized = exercises.map(ex => ({
       ...ex,
-      sets: ex.sets.map(s => (s.weight && s.reps && !s.done) ? { ...s, done: true } : s),
+      sets: ex.sets.map(s => {
+        if (s.done || !(parseInt(s.reps) > 0)) return s;
+        // Reps entered but not explicitly ticked off — mark done. Blank weight
+        // means bodyweight (abs/pullups/etc.); store as "0" so it's clear.
+        return { ...s, done: true, weight: s.weight === "" || s.weight == null ? "0" : s.weight };
+      }),
     }));
     await onFinish({exercises: finalized, elapsed: finalElapsed, name: workoutName || "Workout", date: finalDate});
     // onFinish navigates away; keep saving=true so the button stays locked
