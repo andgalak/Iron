@@ -1872,12 +1872,15 @@ function WorkoutScreen({
                       }
                     }
                     const sets=[...item.sets];sets[si]={...s,done:newDone};
-                    // Auto-fill the next empty set with this set's weight + reps
-                    // so 4 same-as-last sets becomes zero typing.
+                    // Auto-fill ALL subsequent empty sets in this exercise with
+                    // this set's weight + reps. So 4 same-as-last sets = type
+                    // set 1, tap ✓, then ✓ ✓ ✓ on the now-pre-filled remaining
+                    // rows. (Skips rows the user has already typed into.)
                     if (newDone && s.weight && s.reps) {
-                      const next = sets[si+1];
-                      if (next && !next.weight && !next.reps && !next.done) {
-                        sets[si+1] = { ...next, weight: s.weight, reps: s.reps };
+                      for (let j = si+1; j < sets.length; j++) {
+                        if (!sets[j].weight && !sets[j].reps && !sets[j].done) {
+                          sets[j] = { ...sets[j], weight: s.weight, reps: s.reps };
+                        }
                       }
                     }
                     setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
