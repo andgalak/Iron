@@ -522,27 +522,12 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], goalLogs = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateTask, onUpdateDiet, onUpdateActive, onToggleGoal, onSetGoalMinutes, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
+function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], goalLogs = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateDiet, onUpdateActive, onToggleGoal, onSetGoalMinutes, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
   const goalList = (Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST).map(normalizeGoal).filter(g => g.active !== false);
   const [minsEditGoal, setMinsEditGoal] = useState(null); // goalId currently entering minutes
   const [minsInput, setMinsInput] = useState("");
   const [addingToday, setAddingToday] = useState(false);
   const [newTodayText, setNewTodayText] = useState("");
-  const [newTodayDate, setNewTodayDate] = useState("");   // optional dueDate for the new task
-  const [schedulingTask, setSchedulingTask] = useState(null); // cardId currently being scheduled
-  // Friendly short date label for the task badge: "Wed", "Fri", or "May 30" for >7 days out.
-  function fmtDueLabel(iso) {
-    if (!iso) return "";
-    const today = isoDate();
-    if (iso === today) return "today";
-    const d = new Date(iso + "T12:00:00");
-    const todayD = new Date(today + "T12:00:00");
-    const diff = Math.round((d - todayD) / 86400000);
-    if (diff === 1) return "tmrw";
-    if (diff > 1 && diff < 7) return d.toLocaleDateString("en-US", { weekday: "short" });
-    if (diff < 0) return "overdue";
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
   // Simple reference targets derived from the goal list (for trend goal-lines + perfect-day hero)
   const G = {
     perfectDays: 3,
@@ -668,49 +653,35 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
           <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>TODAY</div>
           <button onClick={()=>{setAddingToday(true);}} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:14,cursor:"pointer",padding:"1px 9px",lineHeight:1.2}}>+</button>
         </div>
-        {[...todayTasks].sort((a,b)=>(a.done?1:0)-(b.done?1:0)).map(card=>{
-          const isScheduling = schedulingTask === card.id;
-          return (
-            <div key={card.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
-              <button aria-label="Complete task" onClick={()=>{ if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id); }}
-                style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
-                <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
-                  <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
-                  {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
-                </svg>
-              </button>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
-                {card.dueDate && card.dueDate < isoDate() && (
-                  <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue ({fmtDueLabel(card.dueDate)})</div>
-                )}
-              </div>
-              {onUpdateTask && (
-                isScheduling ? (
-                  <input type="date" autoFocus min={isoDate()} value={card.dueDate || ""}
-                    onChange={e=>{ onUpdateTask(card.id, { dueDate: e.target.value || null }); setSchedulingTask(null); }}
-                    onBlur={()=>setSchedulingTask(null)}
-                    style={{flexShrink:0,background:"#1a1a1a",border:`1px solid ${C.accent}`,borderRadius:6,color:C.text,padding:"4px 6px",fontSize:11,fontFamily:MONO,outline:"none",colorScheme:"dark"}}/>
-                ) : (
-                  <button onClick={()=>setSchedulingTask(card.id)} title={card.dueDate ? `Scheduled for ${card.dueDate}` : "Schedule for later"}
-                    style={{flexShrink:0,background:"transparent",border:"none",color:C.muted,fontSize:11,fontFamily:MONO,cursor:"pointer",padding:"4px 2px"}}>📅</button>
-                )
+        {[...todayTasks].sort((a,b)=>(a.done?1:0)-(b.done?1:0)).map(card=>(
+          <div key={card.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
+            <button aria-label="Complete task" onClick={()=>{ if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id); }}
+              style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
+              <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
+                <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
+                {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
+              </svg>
+            </button>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
+              {/* Overdue context — scheduling lives on Focus, but a red note here
+                  flags a task that was due before today and is still open. */}
+              {card.dueDate && card.dueDate < isoDate() && !card.done && (
+                <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue from {card.dueDate}</div>
               )}
             </div>
-          );
-        })}
+          </div>
+        ))}
         {addingToday && (
-          <div style={{marginTop:8,display:"flex",gap:6,alignItems:"center"}}>
+          <div style={{marginTop:8}}>
             <input autoFocus value={newTodayText} onChange={e=>setNewTodayText(e.target.value)}
               onKeyDown={e=>{
-                if(e.key==="Enter"&&newTodayText.trim()){ onAddTask("Today", newTodayText, newTodayDate || null); setNewTodayText(""); setNewTodayDate(""); setAddingToday(false); }
-                if(e.key==="Escape"){ setAddingToday(false); setNewTodayText(""); setNewTodayDate(""); }
+                if(e.key==="Enter"&&newTodayText.trim()){ onAddTask("Today", newTodayText); setNewTodayText(""); setAddingToday(false); }
+                if(e.key==="Escape"){ setAddingToday(false); setNewTodayText(""); }
               }}
-              placeholder={newTodayDate ? `Task for ${fmtDueLabel(newTodayDate)}…` : "Add a task…"}
-              style={{flex:1,minWidth:0,background:"#161616",border:`1px solid ${C.accent}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
-            <input type="date" min={isoDate()} value={newTodayDate} onChange={e=>setNewTodayDate(e.target.value)}
-              title="Schedule for later (leave blank for today)"
-              style={{flexShrink:0,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:newTodayDate?C.accent:C.muted,padding:"9px 6px",fontSize:11,fontFamily:MONO,outline:"none",colorScheme:"dark",width:newTodayDate?92:34}}/>
+              placeholder="Add a task for today…"
+              style={{width:"100%",background:"#161616",border:`1px solid ${C.accent}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
+            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:5,letterSpacing:"0.03em"}}>To schedule for a future day, add it on the Focus tab.</div>
           </div>
         )}
         {todayTasks.length===0 && !addingToday && (
@@ -3463,7 +3434,7 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateTask={updateTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
           <IronTab  history={history} onStartWorkout={startWorkout}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
