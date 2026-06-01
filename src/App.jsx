@@ -107,6 +107,18 @@ const GOAL_EMOJI_BY_KIND = {
   perfect_days:"⭐", muscle:"💪", workouts:"🏋", zone2:"🫀", timed:"⏱",
   diet_green:"🥗", active_green:"👟", diet_red:"🔴", habit:"✅",
 };
+// Per-muscle-group default emoji, so a Chest goal, a Back goal, a Legs goal
+// don't all read as "💪 (biceps)". Used when the goal hasn't set its own.
+const MUSCLE_GROUP_EMOJI = {
+  Chest:       "🫁",  // chest cavity
+  Back:        "🦴",  // spine
+  Shoulders:   "🏔",  // wide ridge / shoulder line
+  Arms:        "💪",  // biceps flex
+  Legs:        "🦵",  // leg
+  Abs:         "🔥",  // core fire / six-pack
+  PT:          "🩹",  // recovery / rehab
+  "Full Body": "🤸",  // gymnast / whole-body movement
+};
 function defaultGoalColor(kind) {
   if (kind === "zone2" || kind === "timed") return "#38bdf8";   // blue
   if (kind === "diet_red") return "#dc2626";                    // red (a "max" cap)
@@ -120,11 +132,17 @@ const GOAL_COLORS = ["#FF6B35","#4ade80","#38bdf8","#a78bfa","#fbbf24","#f472b6"
 // Fill in type/color/emoji/active for any goal (derive-on-read so existing
 // stored goals keep working without a destructive migration).
 function normalizeGoal(g) {
+  // Muscle goals look up emoji by group (Chest → 🫁, Back → 🦴, etc.) so
+  // each goal reads distinctly instead of all being 💪.
+  let defaultEmoji = GOAL_EMOJI_BY_KIND[g.kind] || "•";
+  if (g.kind === "muscle" && g.group && MUSCLE_GROUP_EMOJI[g.group]) {
+    defaultEmoji = MUSCLE_GROUP_EMOJI[g.group];
+  }
   return {
     ...g,
     type:   g.type   || GOAL_TYPE_BY_KIND[g.kind] || "habit",
     color:  g.color  || defaultGoalColor(g.kind),
-    emoji:  g.emoji  || GOAL_EMOJI_BY_KIND[g.kind] || "•",
+    emoji:  g.emoji  || defaultEmoji,
     active: g.active === false ? false : true,
   };
 }
@@ -342,6 +360,28 @@ function getWeekDays(offset=0) {
   const mon=new Date(now); mon.setDate(now.getDate()-((day+6)%7)+offset*7);
   return Array.from({length:7},(_,i)=>{ const d=new Date(mon); d.setDate(mon.getDate()+i); return isoDate(d); });
 }
+// Rolling 7-day window — today and the 6 prior days. Used by Home so goal
+// progress is "the past week of your life" instead of "since Monday."
+function getRolling7Days() {
+  const out = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    out.push(isoDate(d));
+  }
+  return out;
+}
+// Encouraging-by-default color ramp for a completion percentage (0–100).
+// Andrew's spec: <30 aggressive red, 30–50 soft red, 50–70 orange,
+// 70–80 lime/light-green, 80–90 medium green, 90–99 good green, 100 vivid.
+function progressColor(pct) {
+  if (pct >= 100) return "#22ee66"; // amazing green (gets a glow at the call site)
+  if (pct >= 90)  return "#4ade80"; // good green (matches C.green)
+  if (pct >= 80)  return "#86efac"; // medium light green
+  if (pct >= 70)  return "#bef264"; // lime
+  if (pct >= 50)  return "#FF6B35"; // orange (C.accent)
+  if (pct >= 30)  return "#f87171"; // soft red
+  return "#dc2626";                 // aggressive red (C.red)
+}
 function thisWeekCount(history) {
   const days=getWeekDays(0); const set=new Set(days);
   return history.filter(w=>set.has(isoDate(new Date(w.date)))).length;
@@ -525,17 +565,25 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
   const wkActive    = thisWeekDays.filter(d=>activeLog[d]==="green").length;
   const weekFocusMins = focusSessions.filter(s=>thisWeekDays.includes(s.date)).reduce((a,s)=>a+s.mins,0);
 
-  // Weekly goal completion — each goal counts as ONE binary hit (so a 60-min
-  // Zone 2 goal weighs the same as "Chest 1x", not 60 points).
-  const goalProgresses = goalList.map(g => ({ goal: g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, goalLogs, weekDays: thisWeekDays, customExercises }) }));
+  // Rolling 7-day window — goals evaluate "the past week of your life"
+  // (today and the 6 prior days) instead of "since Monday."
+  const rolling7 = getRolling7Days();
+  // Each goal counts as ONE binary hit (a 60-min Zone 2 goal weighs the
+  // same as "Chest 1x", not 60 points). Goals normalized so muscle ones get
+  // their per-group emoji (Chest 🫁, Back 🦴, etc.).
+  const goalProgresses = goalList.map(normalizeGoal).map(g => ({ goal: g, p: computeGoalProgress(g, { history, dietLog, activeLog, zone2Log, goalLogs, weekDays: rolling7, customExercises }) }));
   const goalsHit = goalProgresses.filter(x => x.p.hit).length;
   const goalsTotal = goalProgresses.length;
   const weekPct = goalsTotal ? Math.round((goalsHit/goalsTotal)*100) : 0;
+  // Encouraging labels — partial progress reads as progress, not failure.
   const weekLabel = goalsTotal===0 ? "Set some goals"
-                  : weekPct===100 ? "Week crushed"
-                  : weekPct>=66 ? "On track"
-                  : weekPct>=33 ? "Getting there"
+                  : weekPct===100 ? "Past 7 days crushed"
+                  : weekPct>=90  ? "Almost perfect"
+                  : weekPct>=70  ? "On track"
+                  : weekPct>=50  ? "Halfway there"
+                  : weekPct>=30  ? "Getting started"
                   : "Let's get to work";
+  const weekColor = goalsTotal === 0 ? C.muted : progressColor(weekPct);
 
   // 8-week trends
   const now = new Date();
@@ -586,7 +634,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
             {weekPct===100 && goalsTotal>0 && <span style={{marginLeft:8,fontSize:22}}>⭐</span>}
           </div>
           <div style={{textAlign:"right"}}>
-            <div style={{fontSize:28,fontWeight:700,color:weekPct===100?C.green:weekPct>0?C.accent:C.muted,fontFamily:MONO,lineHeight:1}}>{weekPct}%</div>
+            <div style={{fontSize:28,fontWeight:700,color:weekColor,fontFamily:MONO,lineHeight:1,textShadow:weekPct>=100?`0 0 18px ${weekColor}66`:"none"}}>{weekPct}%</div>
             <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.08em",marginTop:2}}>{goalsHit}/{goalsTotal} GOALS</div>
           </div>
         </div>
@@ -640,9 +688,9 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
         return (
           <div style={{background:`linear-gradient(160deg, ${C.card}, ${C.surface})`,border:`1px solid ${C.accent}40`,borderRadius:16,padding:"16px 16px 8px",marginBottom:14,boxShadow:`0 0 30px ${C.accent}12`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>YOUR WEEK</div>
+              <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>PAST 7 DAYS</div>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:(total>0&&hitCount===total)?C.green:C.sub}}>{hitCount}/{total} hit</span>
+                <span style={{fontSize:13,fontFamily:MONO,fontWeight:700,color:total>0 ? weekColor : C.sub}}>{hitCount}/{total} hit</span>
                 {onEditGoals && <button onClick={onEditGoals} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO,padding:"4px 9px"}}>Edit</button>}
               </div>
             </div>
@@ -1253,13 +1301,15 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
     if (dietLog[d] === "red") return -2;                   // red diet only
     return 0;                                              // empty
   }
+  // Friendlier partial credit: 2/3 reads green-ish (you did most of it),
+  // 1/3 stays warm orange, 3/3 is vivid, red-diet-only is the only "bad" red.
   function cellColor(score) {
-    if (score === -1) return "transparent";
-    if (score === -2) return C.red + "55";
-    if (score === 0)  return C.border;
-    if (score === 1)  return C.accent + "33";
-    if (score === 2)  return C.accent + "88";
-    if (score === 3)  return C.green;
+    if (score === -1) return "transparent";       // future
+    if (score === -2) return "#dc2626bb";         // red diet only — aggressive
+    if (score === 0)  return C.border;            // empty / not logged
+    if (score === 1)  return "#FF6B35aa";         // 1/3 — warm orange
+    if (score === 2)  return "#86efacaa";         // 2/3 — light green (was orange)
+    if (score === 3)  return "#22ee66";           // 3/3 — vivid green
     return C.border;
   }
 
@@ -1362,9 +1412,10 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
           ))}
         </div>
         <div style={{display:"flex",gap:10,marginTop:12,fontSize:9,color:C.muted,fontFamily:MONO,alignItems:"center",flexWrap:"wrap"}}>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.green,borderRadius:2,display:"inline-block"}}/>Perfect (3/3)</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.accent+"88",borderRadius:2,display:"inline-block"}}/>Partial</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.red+"55",borderRadius:2,display:"inline-block"}}/>Red diet</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#22ee66",borderRadius:2,display:"inline-block"}}/>Perfect (3/3)</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#86efacaa",borderRadius:2,display:"inline-block"}}/>2/3</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#FF6B35aa",borderRadius:2,display:"inline-block"}}/>1/3</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#dc2626bb",borderRadius:2,display:"inline-block"}}/>Red diet</span>
           <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.border,borderRadius:2,display:"inline-block"}}/>Empty</span>
         </div>
       </div>
