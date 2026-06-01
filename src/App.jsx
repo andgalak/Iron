@@ -522,12 +522,27 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], goalLogs = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateDiet, onUpdateActive, onToggleGoal, onSetGoalMinutes, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
+function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], goalLogs = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateTask, onUpdateDiet, onUpdateActive, onToggleGoal, onSetGoalMinutes, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
   const goalList = (Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST).map(normalizeGoal).filter(g => g.active !== false);
   const [minsEditGoal, setMinsEditGoal] = useState(null); // goalId currently entering minutes
   const [minsInput, setMinsInput] = useState("");
   const [addingToday, setAddingToday] = useState(false);
   const [newTodayText, setNewTodayText] = useState("");
+  const [newTodayDate, setNewTodayDate] = useState("");   // optional dueDate for the new task
+  const [schedulingTask, setSchedulingTask] = useState(null); // cardId currently being scheduled
+  // Friendly short date label for the task badge: "Wed", "Fri", or "May 30" for >7 days out.
+  function fmtDueLabel(iso) {
+    if (!iso) return "";
+    const today = isoDate();
+    if (iso === today) return "today";
+    const d = new Date(iso + "T12:00:00");
+    const todayD = new Date(today + "T12:00:00");
+    const diff = Math.round((d - todayD) / 86400000);
+    if (diff === 1) return "tmrw";
+    if (diff > 1 && diff < 7) return d.toLocaleDateString("en-US", { weekday: "short" });
+    if (diff < 0) return "overdue";
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
   // Simple reference targets derived from the goal list (for trend goal-lines + perfect-day hero)
   const G = {
     perfectDays: 3,
@@ -653,24 +668,49 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
           <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>TODAY</div>
           <button onClick={()=>{setAddingToday(true);}} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:14,cursor:"pointer",padding:"1px 9px",lineHeight:1.2}}>+</button>
         </div>
-        {[...todayTasks].sort((a,b)=>(a.done?1:0)-(b.done?1:0)).map(card=>(
-          <div key={card.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
-            <button aria-label="Complete task" onClick={()=>{ if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id); }}
-              style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
-              <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
-                <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
-                {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
-              </svg>
-            </button>
-            <div style={{flex:1,fontSize:13,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
-          </div>
-        ))}
+        {[...todayTasks].sort((a,b)=>(a.done?1:0)-(b.done?1:0)).map(card=>{
+          const isScheduling = schedulingTask === card.id;
+          return (
+            <div key={card.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
+              <button aria-label="Complete task" onClick={()=>{ if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id); }}
+                style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
+                <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
+                  <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
+                  {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
+                </svg>
+              </button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
+                {card.dueDate && card.dueDate < isoDate() && (
+                  <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue ({fmtDueLabel(card.dueDate)})</div>
+                )}
+              </div>
+              {onUpdateTask && (
+                isScheduling ? (
+                  <input type="date" autoFocus min={isoDate()} value={card.dueDate || ""}
+                    onChange={e=>{ onUpdateTask(card.id, { dueDate: e.target.value || null }); setSchedulingTask(null); }}
+                    onBlur={()=>setSchedulingTask(null)}
+                    style={{flexShrink:0,background:"#1a1a1a",border:`1px solid ${C.accent}`,borderRadius:6,color:C.text,padding:"4px 6px",fontSize:11,fontFamily:MONO,outline:"none",colorScheme:"dark"}}/>
+                ) : (
+                  <button onClick={()=>setSchedulingTask(card.id)} title={card.dueDate ? `Scheduled for ${card.dueDate}` : "Schedule for later"}
+                    style={{flexShrink:0,background:"transparent",border:"none",color:C.muted,fontSize:11,fontFamily:MONO,cursor:"pointer",padding:"4px 2px"}}>📅</button>
+                )
+              )}
+            </div>
+          );
+        })}
         {addingToday && (
-          <div style={{marginTop:8}}>
+          <div style={{marginTop:8,display:"flex",gap:6,alignItems:"center"}}>
             <input autoFocus value={newTodayText} onChange={e=>setNewTodayText(e.target.value)}
-              onKeyDown={e=>{if(e.key==="Enter"&&newTodayText.trim()){onAddTask("Today",newTodayText);setNewTodayText("");setAddingToday(false);}if(e.key==="Escape"){setAddingToday(false);setNewTodayText("");}}}
-              placeholder="Add a task for today…"
-              style={{width:"100%",background:"#161616",border:`1px solid ${C.accent}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
+              onKeyDown={e=>{
+                if(e.key==="Enter"&&newTodayText.trim()){ onAddTask("Today", newTodayText, newTodayDate || null); setNewTodayText(""); setNewTodayDate(""); setAddingToday(false); }
+                if(e.key==="Escape"){ setAddingToday(false); setNewTodayText(""); setNewTodayDate(""); }
+              }}
+              placeholder={newTodayDate ? `Task for ${fmtDueLabel(newTodayDate)}…` : "Add a task…"}
+              style={{flex:1,minWidth:0,background:"#161616",border:`1px solid ${C.accent}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
+            <input type="date" min={isoDate()} value={newTodayDate} onChange={e=>setNewTodayDate(e.target.value)}
+              title="Schedule for later (leave blank for today)"
+              style={{flexShrink:0,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:newTodayDate?C.accent:C.muted,padding:"9px 6px",fontSize:11,fontFamily:MONO,outline:"none",colorScheme:"dark",width:newTodayDate?92:34}}/>
           </div>
         )}
         {todayTasks.length===0 && !addingToday && (
@@ -920,6 +960,19 @@ function CoffeeMug({ fillPct, running, timeText }) {
 // ─── Kanban drag-and-drop pieces (Trello-style, touch-friendly via @dnd-kit) ──
 const TASK_LANES = ["Today", "In Progress", "Keep in Mind"];
 const TASK_LANE_COLOR = { "Today": C.accent, "In Progress": C.blue, "Keep in Mind": C.muted };
+// "Wed", "tmrw", "today", "May 30", or "overdue" — used on task date badges.
+function taskDueLabel(iso) {
+  if (!iso) return "";
+  const today = isoDate();
+  if (iso === today) return "today";
+  const d = new Date(iso + "T12:00:00");
+  const todayD = new Date(today + "T12:00:00");
+  const diff = Math.round((d - todayD) / 86400000);
+  if (diff === 1) return "tmrw";
+  if (diff > 1 && diff < 7) return d.toLocaleDateString("en-US", { weekday: "short" });
+  if (diff < 0) return "overdue";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 // The visual content of a task card (shared by the sortable card + drag overlay).
 function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging }) {
@@ -943,7 +996,15 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging }) {
           </svg>
         </button>
       )}
-      <div style={{ flex: 1, fontSize: 12, color: card.done?C.muted:C.text, fontFamily: MONO, lineHeight: 1.5, textDecoration: card.done?"line-through":"none", minWidth: 0, wordBreak: "break-word" }}>{card.text}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: card.done?C.muted:C.text, fontFamily: MONO, lineHeight: 1.5, textDecoration: card.done?"line-through":"none", wordBreak: "break-word" }}>{card.text}</div>
+        {card.dueDate && (() => {
+          const isOverdue = card.dueDate < isoDate();
+          const isToday = card.dueDate === isoDate();
+          const color = isOverdue ? C.red : isToday ? C.accent : C.muted;
+          return <div style={{ fontSize: 10, color, fontFamily: MONO, marginTop: 3, letterSpacing: "0.03em" }}>📅 {taskDueLabel(card.dueDate)}</div>;
+        })()}
+      </div>
     </div>
   );
 }
@@ -985,7 +1046,9 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   const [sessionLabel, setSessionLabel] = useState("");
   const [addingLane, setAddingLane] = useState(null); // lane name being added to
   const [newCardText, setNewCardText] = useState("");
+  const [newCardDate, setNewCardDate] = useState(""); // optional due date for the new task
   const [menuCard, setMenuCard] = useState(null); // { id, lane } for the move/action sheet
+  const [menuDateEdit, setMenuDateEdit] = useState(false); // schedule mode inside the menu
   const [activeId, setActiveId] = useState(null); // card id currently being dragged
   const timerRef = useRef(null);
   const totalSecs = timerMins * 60;
@@ -1066,8 +1129,8 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
 
   function submitCard(laneName) {
     if (!newCardText.trim()) return;
-    onAddTask(laneName, newCardText);
-    setNewCardText(""); setAddingLane(null);
+    onAddTask(laneName, newCardText, newCardDate || null);
+    setNewCardText(""); setNewCardDate(""); setAddingLane(null);
   }
 
   // Coffee mug fill: 1 = full, 0 = empty
@@ -1152,15 +1215,18 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     ? <div>
                         <textarea style={{width:"100%",background:"#1a1a1a",border:`1px solid ${lc}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",resize:"none",boxSizing:"border-box",minHeight:56}}
                           autoFocus value={newCardText} onChange={e=>setNewCardText(e.target.value)}
-                          onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submitCard(lane);}if(e.key==="Escape"){setAddingLane(null);setNewCardText("");}}}
-                          placeholder="Task…"/>
+                          onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submitCard(lane);}if(e.key==="Escape"){setAddingLane(null);setNewCardText("");setNewCardDate("");}}}
+                          placeholder={lane==="Today" && newCardDate ? `Task for ${taskDueLabel(newCardDate)}…` : "Task…"}/>
+                        <input type="date" min={isoDate()} value={newCardDate} onChange={e=>setNewCardDate(e.target.value)}
+                          title="Schedule for a future day (blank = no date)"
+                          style={{width:"100%",marginTop:6,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:6,color:newCardDate?lc:C.muted,padding:"6px 8px",fontSize:11,fontFamily:MONO,outline:"none",colorScheme:"dark",boxSizing:"border-box"}}/>
                         <div style={{display:"flex",gap:6,marginTop:6}}>
                           <button style={{flex:1,background:lc,color:"#000",border:"none",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer",fontFamily:MONO,fontWeight:700}} onClick={()=>submitCard(lane)}>Add</button>
-                          <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAddingLane(null);setNewCardText("");}}>Cancel</button>
+                          <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAddingLane(null);setNewCardText("");setNewCardDate("");}}>Cancel</button>
                         </div>
                       </div>
                     : <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border2}`,borderRadius:8,padding:"7px",fontSize:11,color:C.dim,cursor:"pointer",fontFamily:MONO,marginTop:2}}
-                        onClick={()=>{setAddingLane(lane);setNewCardText("");}}>+ Add task</button>
+                        onClick={()=>{setAddingLane(lane);setNewCardText("");setNewCardDate("");}}>+ Add task</button>
                 }>
                 {cards.map(card=>(
                   <SortableTaskCard key={card.id} card={card} lane={lane} onToggle={onToggleTask} onOpenMenu={(id,ln)=>setMenuCard({id,lane:ln})} />
@@ -1182,7 +1248,24 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
         return (
           <div onClick={()=>setMenuCard(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:160,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
             <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:480,background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"18px 18px 0 0",padding:"16px 16px calc(20px + env(safe-area-inset-bottom))"}}>
-              <div style={{fontSize:13,color:C.text,fontFamily:MONO,lineHeight:1.5,marginBottom:14,paddingBottom:12,borderBottom:`1px solid ${C.border}`}}>{card.text}</div>
+              <div style={{fontSize:13,color:C.text,fontFamily:MONO,lineHeight:1.5,marginBottom:6}}>{card.text}</div>
+              {card.dueDate && (
+                <div style={{fontSize:11,color:card.dueDate<isoDate()?C.red:card.dueDate===isoDate()?C.accent:C.muted,fontFamily:MONO,marginBottom:8}}>📅 {taskDueLabel(card.dueDate)} <span style={{color:C.dim}}>· {card.dueDate}</span></div>
+              )}
+              <div style={{paddingBottom:12,marginBottom:14,borderBottom:`1px solid ${C.border}`}}/>
+
+              {/* Schedule */}
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>SCHEDULE</div>
+              <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+                <input type="date" min={isoDate()} value={card.dueDate || ""}
+                  onChange={e=>{ if (onUpdateTask) onUpdateTask(menuCard.id, { dueDate: e.target.value || null }); }}
+                  style={{flex:1,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:card.dueDate?C.accent:C.muted,padding:"10px 12px",fontSize:13,fontFamily:MONO,outline:"none",colorScheme:"dark"}}/>
+                {card.dueDate && (
+                  <button onClick={()=>{ if (onUpdateTask) onUpdateTask(menuCard.id, { dueDate: null }); }}
+                    style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"10px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Clear</button>
+                )}
+              </div>
+
               <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>MOVE TO</div>
               {LANES.map(lane=>(
                 <button key={lane} disabled={lane===menuCard.lane} onClick={()=>{onMoveTask(menuCard.id,lane);setMenuCard(null);}}
@@ -3096,11 +3179,27 @@ export default function App() {
 
   // Single task board (Today / In Progress / Keep in Mind) — Home + Focus share this
   const board = boards[0] || null;
-  const todayTasks = board?.cols?.find(c => c.name === "Today")?.cards || [];
+  // Tasks in the Today lane with a future due date are scheduled — hidden
+  // from the Home "TODAY" checklist until that date arrives.
+  const todayISO = isoDate();
+  const todayTasks = (board?.cols?.find(c => c.name === "Today")?.cards || [])
+    .filter(k => !k.dueDate || k.dueDate <= todayISO);
   function updateBoard(mutator) { setBoards(bs => bs.map((b,i) => i===0 ? mutator(b) : b)); }
-  function addTask(laneName, text) {
+  function addTask(laneName, text, dueDate = null) {
     if (!text.trim() || !board) return;
-    updateBoard(b => ({ ...b, cols: b.cols.map(c => c.name===laneName ? { ...c, cards: [...c.cards, { id: uid(), text: text.trim(), tags: [], done: false }] } : c) }));
+    const card = { id: uid(), text: text.trim(), tags: [], done: false };
+    if (dueDate) card.dueDate = dueDate;
+    updateBoard(b => ({ ...b, cols: b.cols.map(c => c.name===laneName ? { ...c, cards: [...c.cards, card] } : c) }));
+  }
+  // Generic per-card edit — used to set/clear dueDate from the action menu.
+  // Passing { dueDate: null } clears the field cleanly.
+  function updateTask(cardId, patch) {
+    updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.map(k => {
+      if (k.id !== cardId) return k;
+      const next = { ...k, ...patch };
+      if (patch.dueDate === null || patch.dueDate === "") delete next.dueDate;
+      return next;
+    }) })) }));
   }
   function toggleTask(cardId) {
     updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.map(k => k.id===cardId ? { ...k, done: !k.done } : k) })) }));
@@ -3364,12 +3463,12 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateTask={updateTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
           <IronTab  history={history} onStartWorkout={startWorkout}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
-        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks}/>}
+        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks} onUpdateTask={updateTask}/>}
         {tab==="trends" && <TrendsTab history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} focusSessions={focusSessions} bodyweight={bwState.data} goals={goalList} goalLogs={goalLogs} customExercises={customExercises}/>}
       </div>
 
