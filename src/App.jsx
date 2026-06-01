@@ -138,11 +138,18 @@ function normalizeGoal(g) {
   if (g.kind === "muscle" && g.group && MUSCLE_GROUP_EMOJI[g.group]) {
     defaultEmoji = MUSCLE_GROUP_EMOJI[g.group];
   }
+  // Treat the legacy auto-default 💪 on non-Arms muscle goals as "no custom
+  // emoji set" so existing users get the new per-group emojis without losing
+  // any genuinely customized choice. Arms legitimately uses 💪.
+  let storedEmoji = g.emoji;
+  if (g.kind === "muscle" && storedEmoji === "💪" && g.group && g.group !== "Arms") {
+    storedEmoji = undefined;
+  }
   return {
     ...g,
-    type:   g.type   || GOAL_TYPE_BY_KIND[g.kind] || "habit",
-    color:  g.color  || defaultGoalColor(g.kind),
-    emoji:  g.emoji  || defaultEmoji,
+    type:   g.type      || GOAL_TYPE_BY_KIND[g.kind] || "habit",
+    color:  g.color     || defaultGoalColor(g.kind),
+    emoji:  storedEmoji || defaultEmoji,
     active: g.active === false ? false : true,
   };
 }
