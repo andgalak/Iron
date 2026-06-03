@@ -335,12 +335,14 @@ function isBwSet(s) {
 }
 // Returns { kind: "weight"|"bw"|null, value } so PR comparisons stay in the
 // right "space" — weighted sets compare e1RM, bodyweight sets compare reps.
+// Blank weight + reps is treated as bodyweight (matches the save-time
+// convention) so PRs actually fire mid-workout for abs/pullups/dips/etc.
 function setMetric(s) {
   const r = parseInt(s?.reps);
   if (!r) return { kind: null, value: 0 };
-  if (isBwSet(s)) return { kind: "bw", value: r };
-  const w = parseFloat(s?.weight);
-  if (!w) return { kind: null, value: 0 };
+  const wRaw = s?.weight;
+  const w = parseFloat(wRaw);
+  if (wRaw === "" || wRaw == null || isNaN(w) || w === 0) return { kind: "bw", value: r };
   return { kind: "weight", value: Math.round(w * (1 + r/30)) };
 }
 // Per-exercise best across history: { exId: { e1rm, bwReps } }.
@@ -528,6 +530,22 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
   const [minsInput, setMinsInput] = useState("");
   const [addingToday, setAddingToday] = useState(false);
   const [newTodayText, setNewTodayText] = useState("");
+  const [showPerfect, setShowPerfect] = useState(false);
+
+  // Fire the Perfect Day celebration the moment all three conditions land
+  // (workout + clean diet + active), once per calendar day.
+  useEffect(() => {
+    const t = isoDate();
+    const KEY = `iron_perfect_${t}`;
+    try { if (localStorage.getItem(KEY)) return; } catch { return; }
+    const dietGreen   = dietLog[t]   === "green";
+    const activeGreen = activeLog[t] === "green";
+    const workedOut   = workoutDateSet(history).has(t);
+    if (dietGreen && activeGreen && workedOut) {
+      try { localStorage.setItem(KEY, "1"); } catch {}
+      setShowPerfect(true);
+    }
+  }, [dietLog, activeLog, history]);
   // Simple reference targets derived from the goal list (for trend goal-lines + perfect-day hero)
   const G = {
     perfectDays: 3,
@@ -778,6 +796,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
         <button onClick={()=>onGoTo("iron")} style={{background:"transparent",border:`1px solid ${C.accent}`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Start a workout →</button>
       </div>
 
+      {showPerfect && <PerfectDayCelebration onClose={()=>setShowPerfect(false)}/>}
     </div>
   );
 }
@@ -2137,6 +2156,51 @@ function PRCelebration({ pr, onClose }) {
           {pr.prev > 0 ? <span style={{color:C.dim}}> · up from {pr.prev}</span> : <span style={{color:C.dim}}> · first PR</span>}
         </div>
         <button onClick={onClose} style={{background:C.accent,border:"none",borderRadius:10,color:"#000",padding:"14px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}>Keep Going →</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Perfect Day Celebration ──────────────────────────────────────────────────
+// Fires on Home the moment you've logged a workout + clean diet + active for
+// today, once per day (localStorage-flagged).
+function PerfectDayCelebration({ onClose }) {
+  useEffect(()=>{ const t = setTimeout(onClose, 7000); return ()=>clearTimeout(t); }, [onClose]);
+  const G = "#22ee66";
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",animation:"prFadeIn 0.25s ease-out"}}>
+      <div style={{position:"absolute",inset:0,pointerEvents:"none",overflow:"hidden"}}>
+        {Array.from({length:32}).map((_,i)=>{
+          const angle = (i/32) * Math.PI * 2;
+          const r = 220 + (i%4)*40;
+          return (
+            <div key={i} style={{
+              position:"absolute", left:"50%", top:"50%",
+              width:8, height:8, borderRadius:"50%",
+              background: i%3===0 ? G : i%3===1 ? "#86efac" : C.yellow,
+              boxShadow:"0 0 10px currentColor",
+              "--tx": `${Math.cos(angle)*r}px`,
+              "--ty": `${Math.sin(angle)*r}px`,
+              animation:`prSparkle 1.6s cubic-bezier(0.2, 0.6, 0.3, 1) ${i*0.012}s both`,
+            }}/>
+          );
+        })}
+      </div>
+      <div onClick={e=>e.stopPropagation()} style={{
+        position:"relative", textAlign:"center", padding:"36px 32px",
+        background:`linear-gradient(180deg, ${C.card} 0%, ${C.surface} 100%)`,
+        border:`1px solid ${G}`, borderRadius:20, maxWidth:360, width:"calc(100% - 32px)",
+        boxShadow:`0 0 60px ${G}33, 0 0 120px ${G}1a`,
+        animation:"prPop 0.5s cubic-bezier(0.18, 1.25, 0.5, 1)",
+      }}>
+        <div style={{fontSize:64,marginBottom:12,animation:"prTrophyBounce 0.8s ease-out"}}>⭐</div>
+        <div style={{fontSize:10,letterSpacing:"0.3em",color:G,fontFamily:MONO,fontWeight:700,marginBottom:8}}>YOU JUST EARNED</div>
+        <div style={{fontSize:30,fontWeight:900,color:C.text,fontFamily:MONO,marginBottom:10,letterSpacing:"0.06em"}}>PERFECT DAY</div>
+        <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginBottom:22,lineHeight:1.6}}>Workout · clean diet · active. Three for three. Stack another tomorrow.</div>
+        <div style={{display:"flex",justifyContent:"center",gap:14,marginBottom:24,fontSize:16,fontFamily:MONO,color:G}}>
+          <span>🏋 ✓</span><span>🥗 ✓</span><span>👟 ✓</span>
+        </div>
+        <button onClick={onClose} style={{background:G,border:"none",borderRadius:10,color:"#000",padding:"14px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}>Keep going →</button>
       </div>
     </div>
   );
