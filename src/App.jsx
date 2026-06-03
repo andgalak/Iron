@@ -3258,6 +3258,31 @@ export default function App() {
     });
   }, [userId]);
 
+  // Perfect Day celebration — fires the moment all three conditions land for
+  // today (workout + clean diet + active), once per calendar day. MUST live
+  // before any early returns so hook order stays consistent across renders.
+  useEffect(() => {
+    const t = isoDate();
+    const KEY = `iron_perfect_${t}`;
+    try { if (localStorage.getItem(KEY)) return; } catch { return; }
+    const dl = dietState.data || {};
+    const al = activityState.data || {};
+    const h  = workoutsState.data || [];
+    const dietGreen   = dl[t] === "green";
+    const activeGreen = al[t] === "green";
+    const workedOut   = workoutDateSet(h).has(t);
+    if (dietGreen && activeGreen && workedOut) {
+      try { localStorage.setItem(KEY, "1"); } catch {}
+      setShowPerfectDay(true);
+    }
+  }, [dietState.data, activityState.data, workoutsState.data]);
+  // Manual trigger for the Settings preview button (also clears today's dedup
+  // flag so a real Perfect Day landing later still fires).
+  function previewPerfectDay() {
+    try { localStorage.removeItem(`iron_perfect_${isoDate()}`); } catch {}
+    setShowPerfectDay(true);
+  }
+
   // === Auth gates (early returns) ===
   if (!supabaseConfigured) return <SetupRequiredScreen/>;
   if (auth.loading) return <LoadingScreen text="Loading..."/>;
@@ -3267,28 +3292,6 @@ export default function App() {
   const history = workoutsState.data;
   const dietLog = dietState.data;
   const activeLog = activityState.data;
-
-  // Perfect Day celebration — fires the moment all three conditions land for
-  // today (workout + clean diet + active), once per calendar day. Lives at App
-  // level so it shows regardless of which tab Andrew's on when the trigger hits.
-  useEffect(() => {
-    const t = isoDate();
-    const KEY = `iron_perfect_${t}`;
-    try { if (localStorage.getItem(KEY)) return; } catch { return; }
-    const dietGreen   = dietLog[t]   === "green";
-    const activeGreen = activeLog[t] === "green";
-    const workedOut   = workoutDateSet(history).has(t);
-    if (dietGreen && activeGreen && workedOut) {
-      try { localStorage.setItem(KEY, "1"); } catch {}
-      setShowPerfectDay(true);
-    }
-  }, [dietLog, activeLog, history]);
-  // Manual trigger for the Settings preview button (also clears today's dedup
-  // flag so a real Perfect Day landing later still fires).
-  function previewPerfectDay() {
-    try { localStorage.removeItem(`iron_perfect_${isoDate()}`); } catch {}
-    setShowPerfectDay(true);
-  }
   const focusSessions = focusState.data;
   const boards = boardsState.data;
   const customExercises = customExState.data;
