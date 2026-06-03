@@ -530,22 +530,6 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
   const [minsInput, setMinsInput] = useState("");
   const [addingToday, setAddingToday] = useState(false);
   const [newTodayText, setNewTodayText] = useState("");
-  const [showPerfect, setShowPerfect] = useState(false);
-
-  // Fire the Perfect Day celebration the moment all three conditions land
-  // (workout + clean diet + active), once per calendar day.
-  useEffect(() => {
-    const t = isoDate();
-    const KEY = `iron_perfect_${t}`;
-    try { if (localStorage.getItem(KEY)) return; } catch { return; }
-    const dietGreen   = dietLog[t]   === "green";
-    const activeGreen = activeLog[t] === "green";
-    const workedOut   = workoutDateSet(history).has(t);
-    if (dietGreen && activeGreen && workedOut) {
-      try { localStorage.setItem(KEY, "1"); } catch {}
-      setShowPerfect(true);
-    }
-  }, [dietLog, activeLog, history]);
   // Simple reference targets derived from the goal list (for trend goal-lines + perfect-day hero)
   const G = {
     perfectDays: 3,
@@ -796,7 +780,6 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
         <button onClick={()=>onGoTo("iron")} style={{background:"transparent",border:`1px solid ${C.accent}`,borderRadius:8,color:C.accent,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Start a workout →</button>
       </div>
 
-      {showPerfect && <PerfectDayCelebration onClose={()=>setShowPerfect(false)}/>}
     </div>
   );
 }
@@ -3129,7 +3112,7 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
 }
 
 // ─── SETTINGS SHEET ───────────────────────────────────────────────────────────
-function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, onSignOut, onClearAll, onClose }) {
+function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, onSignOut, onClearAll, onPreviewPerfectDay, onClose }) {
   const [showPwForm, setShowPwForm] = useState(false);
   const [newPw, setNewPw] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -3197,6 +3180,14 @@ function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, o
           <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",margin:"22px 0 10px",fontWeight:700}}>DATA</div>
           <button onClick={onClearAll} style={{background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Clear all data</button>
 
+          {onPreviewPerfectDay && (
+            <>
+              <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",margin:"22px 0 10px",fontWeight:700}}>FUN</div>
+              <button onClick={onPreviewPerfectDay} style={{background:"transparent",border:`1px solid #22ee6655`,borderRadius:8,color:"#22ee66",padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>⭐ Preview Perfect Day</button>
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.6}}>See what the celebration looks like. The real popup auto-fires once a day when you log a workout + 🟢 diet + 🟢 active.</div>
+            </>
+          )}
+
           {/* Build version — so you can verify the app picked up the latest deploy */}
           <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:24,paddingTop:14,borderTop:`1px solid ${C.border}`,lineHeight:1.6,letterSpacing:"0.05em"}}>
             BUILD <span style={{color:C.sub}}>{(typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev").slice(0,16).replace("T"," ")} UTC</span>
@@ -3235,6 +3226,7 @@ export default function App() {
   const [showGoalsEditor, setShowGoalsEditor] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPerfectDay, setShowPerfectDay] = useState(false);
   async function hardRefresh() {
     setRefreshing(true);
     try {
@@ -3275,6 +3267,28 @@ export default function App() {
   const history = workoutsState.data;
   const dietLog = dietState.data;
   const activeLog = activityState.data;
+
+  // Perfect Day celebration — fires the moment all three conditions land for
+  // today (workout + clean diet + active), once per calendar day. Lives at App
+  // level so it shows regardless of which tab Andrew's on when the trigger hits.
+  useEffect(() => {
+    const t = isoDate();
+    const KEY = `iron_perfect_${t}`;
+    try { if (localStorage.getItem(KEY)) return; } catch { return; }
+    const dietGreen   = dietLog[t]   === "green";
+    const activeGreen = activeLog[t] === "green";
+    const workedOut   = workoutDateSet(history).has(t);
+    if (dietGreen && activeGreen && workedOut) {
+      try { localStorage.setItem(KEY, "1"); } catch {}
+      setShowPerfectDay(true);
+    }
+  }, [dietLog, activeLog, history]);
+  // Manual trigger for the Settings preview button (also clears today's dedup
+  // flag so a real Perfect Day landing later still fires).
+  function previewPerfectDay() {
+    try { localStorage.removeItem(`iron_perfect_${isoDate()}`); } catch {}
+    setShowPerfectDay(true);
+  }
   const focusSessions = focusState.data;
   const boards = boardsState.data;
   const customExercises = customExState.data;
@@ -3626,9 +3640,12 @@ export default function App() {
           onUpdatePassword={auth.updatePassword}
           onSignOut={auth.signOut}
           onClearAll={clearAll}
+          onPreviewPerfectDay={()=>{ setShowSettings(false); previewPerfectDay(); }}
           onClose={()=>setShowSettings(false)}
         />
       )}
+
+      {showPerfectDay && <PerfectDayCelebration onClose={()=>setShowPerfectDay(false)}/>}
 
       {/* Bottom nav */}
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
