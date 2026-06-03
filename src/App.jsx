@@ -1800,6 +1800,9 @@ function WorkoutScreen({
   const prevBestsRef = useRef(null);
   const prTriggeredRef = useRef(new Set());
   const [activePR, setActivePR] = useState(null);
+  // Brief "✓ SET" flash on every checkmark (always-on positive feedback,
+  // independent of the lifetime-PR popup which still fires on top for real PRs).
+  const [setFlash, setSetFlash] = useState(null);
   if (prevBestsRef.current === null) prevBestsRef.current = bestByExercise(history, excludeWorkoutId);
   const [exercises, setExercises] = useState(() =>
     initialBlocks || initExercises.map(id=>({id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}))
@@ -2038,6 +2041,12 @@ function WorkoutScreen({
                   <button aria-label="Mark set complete" style={{width:44,height:44,flexShrink:0,background:"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}} onClick={()=>{
                     const newDone = !s.done;
                     if (newDone) { try { if (navigator.vibrate) navigator.vibrate(15); } catch {} }
+                    // Always-on positive feedback: brief "✓ SET" overlay on
+                    // every checkmark with valid data (regardless of PR status).
+                    if (newDone && parseInt(s.reps) > 0) {
+                      const isBwHere = parseFloat(s.weight) === 0 || s.weight === "" || s.weight == null;
+                      setSetFlash({ ts: Date.now(), label: isBwHere ? `BW × ${s.reps}` : `${s.weight} × ${s.reps}` });
+                    }
                     // PR detection: only on transition to done, for non-cardio, in non-edit mode.
                     // Weighted sets compare e1RM; bodyweight sets (weight=0) compare REPS.
                     if (newDone && mode !== "edit" && mergedMeta[item.exId]?.cat !== "Cardio" && !prTriggeredRef.current.has(s.id)) {
@@ -2162,7 +2171,27 @@ function WorkoutScreen({
           </div>
         </div>
       )}
+      {setFlash && <SetFlash key={setFlash.ts} label={setFlash.label} onDone={()=>setSetFlash(null)}/>}
       {activePR && <PRCelebration pr={activePR} onClose={handlePRClose}/>}
+    </div>
+  );
+}
+
+// ─── Brief set-complete flash (fires every ✓ tap with valid data) ────────────
+function SetFlash({ label, onDone }) {
+  useEffect(() => { const t = setTimeout(onDone, 1100); return () => clearTimeout(t); }, [onDone]);
+  return (
+    <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:150,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{
+        background:`linear-gradient(135deg, ${C.accent} 0%, #FF8A4C 100%)`,
+        color:"#000", padding:"22px 38px", borderRadius:20,
+        boxShadow:`0 0 50px ${C.accent}cc, 0 0 100px ${C.accent}55`,
+        animation:"setFlashPop 1.1s cubic-bezier(0.2, 0.8, 0.3, 1) forwards",
+        textAlign:"center",
+      }}>
+        <div style={{fontSize:34,fontWeight:900,fontFamily:MONO,lineHeight:1}}>✓</div>
+        <div style={{fontSize:13,fontWeight:700,fontFamily:MONO,marginTop:5,opacity:0.85,letterSpacing:"0.05em"}}>{label}</div>
+      </div>
     </div>
   );
 }
@@ -3687,6 +3716,7 @@ _s.textContent=`
   100% { transform: translateY(-22px) scaleY(1.15); opacity: 0; }
 }
 @keyframes checkDraw{from{stroke-dashoffset:22}to{stroke-dashoffset:0}}
+@keyframes setFlashPop{0%{transform:scale(0.3);opacity:0}18%{transform:scale(1.12);opacity:1}55%{transform:scale(1);opacity:1}100%{transform:scale(0.85);opacity:0}}
 input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}
 *{-webkit-tap-highlight-color:transparent}
 textarea{font-family:'DM Mono','Courier New',monospace}
