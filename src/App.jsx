@@ -1856,6 +1856,45 @@ function WorkoutScreen({
   const [newExName,setNewExName]=useState(""); const [newExMuscle,setNewExMuscle]=useState("Quads"); const [newExCat,setNewExCat]=useState("Legs");
   const filteredEx=ALL_EX.filter(([id,name])=>{const m=mergedMeta[id];return name.toLowerCase().includes(exSearch.toLowerCase())&&(exCat==="All"||m?.cat===exCat);});
 
+  // When a save-time PR is found, we hold the save pending until the user
+  // dismisses the celebration. Otherwise the popup unmounts before they see it
+  // (WorkoutScreen tears down on navigation).
+  const [pendingSave, setPendingSave] = useState(null);
+
+  function detectSaveTimePR(finalizedExs) {
+    // Look across all auto-completed sets for the biggest PR per exercise that
+    // wasn't already triggered by a mid-workout ✓ tap. Returns the first PR found,
+    // or null. Mutates prevBestsRef so subsequent finish attempts don't re-fire.
+    for (const ex of finalizedExs) {
+      if (mergedMeta[ex.exId]?.cat === "Cardio") continue;
+      const prev = prevBestsRef.current[ex.exId] || { e1rm: 0, bwReps: 0 };
+      let bestSet = null, bestM = null;
+      for (const s of ex.sets) {
+        if (!s.done || prTriggeredRef.current.has(s.id)) continue;
+        const m = setMetric(s);
+        if (m.kind === "weight" && m.value > prev.e1rm && (!bestM || m.value > bestM.value)) { bestSet = s; bestM = m; }
+        else if (m.kind === "bw" && m.value > prev.bwReps && (!bestM || m.value > bestM.value)) { bestSet = s; bestM = m; }
+      }
+      if (bestSet && bestM) {
+        const prevVal = bestM.kind === "weight" ? prev.e1rm : prev.bwReps;
+        if (bestM.kind === "weight") prev.e1rm = bestM.value; else prev.bwReps = bestM.value;
+        prevBestsRef.current[ex.exId] = prev;
+        prTriggeredRef.current.add(bestSet.id);
+        return { exId: ex.exId, exName: mergedNames[ex.exId] || ex.exId, kind: bestM.kind, value: bestM.value, prev: prevVal, weight: bestSet.weight, reps: bestSet.reps };
+      }
+    }
+    return null;
+  }
+
+  async function finalizeAndPersist(pkg) { await onFinish(pkg); }
+
+  // Called by the PR popup's onClose — either auto-close (6s) or tap-to-dismiss.
+  // If we deferred a save behind it, complete that save now.
+  function handlePRClose() {
+    setActivePR(null);
+    if (pendingSave) { const data = pendingSave; setPendingSave(null); finalizeAndPersist(data); }
+  }
+
   async function handleSave() {
     if (saving || !canSave) return; // debounce double-tap (C-2)
     setSaving(true);
@@ -1871,7 +1910,18 @@ function WorkoutScreen({
         return { ...s, done: true, weight: s.weight === "" || s.weight == null ? "0" : s.weight };
       }),
     }));
-    await onFinish({exercises: finalized, elapsed: finalElapsed, name: workoutName || "Workout", date: finalDate});
+    const pkg = {exercises: finalized, elapsed: finalElapsed, name: workoutName || "Workout", date: finalDate};
+    // Detect any PR that mid-workout ✓ tapping didn't already fire (covers the
+    // common case of typing weights and hitting Finish without checkboxes).
+    if (mode !== "edit") {
+      const saveTimePR = detectSaveTimePR(finalized);
+      if (saveTimePR) {
+        setPendingSave(pkg);
+        setActivePR(saveTimePR);
+        return; // save resumes from handlePRClose when the popup is dismissed
+      }
+    }
+    await finalizeAndPersist(pkg);
     // onFinish navigates away; keep saving=true so the button stays locked
   }
   function handleDiscard() {
@@ -1927,8 +1977,16 @@ function WorkoutScreen({
         {exercises.map((item,ei)=>{
           const exName=mergedNames[item.exId]||item.exId; const meta=mergedMeta[item.exId];
           const exVol=item.sets.filter(s=>s.done).reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
-          const bestRM=item.sets.reduce((b,s)=>Math.max(b,e1RM(parseFloat(s.weight),parseInt(s.reps))),0);
-          const bestBwReps=item.sets.reduce((b,s)=>Math.max(b, isBwSet(s) ? parseInt(s.reps) : 0),0);
+          // Session bests — count ONLY done sets so the green-check feedback
+          // (a PR was hit) aligns with when the popup is supposed to fire.
+          const bestRM=item.sets.filter(s=>s.done).reduce((b,s)=>Math.max(b,e1RM(parseFloat(s.weight),parseInt(s.reps))),0);
+          const bestBwReps=item.sets.filter(s=>s.done).reduce((b,s)=>Math.max(b, isBwSet(s) ? parseInt(s.reps) : 0),0);
+          // Prior PR pulled from history (mutates as PRs land mid-session).
+          const prior = prevBestsRef.current?.[item.exId] || { e1rm: 0, bwReps: 0 };
+          const priorE1rm = prior.e1rm || 0;
+          const priorBwReps = prior.bwReps || 0;
+          const beatE1rm = priorE1rm > 0 && bestRM > priorE1rm;
+          const beatBw   = priorBwReps > 0 && bestBwReps > priorBwReps;
           const lastRef=lastByExercise[item.exId];
           return(
             <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
@@ -1938,11 +1996,22 @@ function WorkoutScreen({
                   <div style={{fontSize:11,color:"#7a7a7a",fontFamily:MONO}}>{meta?.muscle} · {meta?.cat}</div>
                   {lastRef && <div style={{fontSize:10,color:C.accent,fontFamily:MONO,marginTop:3,opacity:0.85}}>last: {parseFloat(lastRef.weight)===0 ? "BW" : `${lastRef.weight} lbs`} × {lastRef.reps}</div>}
                 </div>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
                   {exVol>0&&<span style={{fontSize:10,color:C.accent,background:"rgba(255,107,53,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{(exVol/1000).toFixed(1)}k</span>}
-                  {bestRM>0
-                    ? <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{bestRM}</span>
-                    : bestBwReps>0 && <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>BW × {bestBwReps}</span>}
+                  {/* Prior PR to beat — the actual number the popup compares against. */}
+                  {priorE1rm > 0 && (
+                    <span style={{fontSize:10,color:beatE1rm?"#22ee66":C.purple,background:beatE1rm?"rgba(34,238,102,0.15)":"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO,fontWeight:beatE1rm?700:400}}>PR {priorE1rm}{beatE1rm?" ✓":""}</span>
+                  )}
+                  {priorBwReps > 0 && (
+                    <span style={{fontSize:10,color:beatBw?"#22ee66":C.purple,background:beatBw?"rgba(34,238,102,0.15)":"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO,fontWeight:beatBw?700:400}}>PR {priorBwReps}r{beatBw?" ✓":""}</span>
+                  )}
+                  {/* Current session best — only show when there's no prior PR yet (first PR coming). */}
+                  {priorE1rm === 0 && priorBwReps === 0 && bestRM>0 && (
+                    <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{bestRM}</span>
+                  )}
+                  {priorE1rm === 0 && priorBwReps === 0 && bestRM===0 && bestBwReps>0 && (
+                    <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>BW × {bestBwReps}</span>
+                  )}
                   <button title="Remove exercise" style={{background:"transparent",border:"none",color:"#7a7a7a",fontSize:14,cursor:"pointer",fontFamily:MONO,width:32,height:32,flexShrink:0}} onClick={()=>setExercises(exercises.filter((_,j)=>j!==ei))}>✕</button>
                 </div>
               </div>
@@ -2110,7 +2179,7 @@ function WorkoutScreen({
           </div>
         </div>
       )}
-      {activePR && <PRCelebration pr={activePR} onClose={()=>setActivePR(null)}/>}
+      {activePR && <PRCelebration pr={activePR} onClose={handlePRClose}/>}
     </div>
   );
 }
