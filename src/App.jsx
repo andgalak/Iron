@@ -3187,7 +3187,7 @@ function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, o
                 {onPreviewPerfectDay && <button onClick={onPreviewPerfectDay} style={{background:"transparent",border:`1px solid #22ee6655`,borderRadius:8,color:"#22ee66",padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>⭐ Preview Perfect Day</button>}
                 {onPreviewPR && <button onClick={onPreviewPR} style={{background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>🏆 Preview PR popup</button>}
               </div>
-              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.6}}>Perfect Day auto-fires once per day when you log a workout + 🟢 diet + 🟢 active. A real PR fires when a set beats the "PR <value>" chip shown on each exercise during a workout — that chip is your historical best.</div>
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.6}}>Perfect Day auto-fires once per day when you log a workout + 🟢 diet + 🟢 active. A real PR fires when a set beats the purple "PR" chip shown on each exercise during a workout — that chip is your historical best.</div>
             </>
           )}
 
