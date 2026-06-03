@@ -3112,7 +3112,7 @@ function GoalsEditor({ goals, onSave, onClose, onReset }) {
 }
 
 // ─── SETTINGS SHEET ───────────────────────────────────────────────────────────
-function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, onSignOut, onClearAll, onPreviewPerfectDay, onClose }) {
+function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, onSignOut, onClearAll, onPreviewPerfectDay, onPreviewPR, onClose }) {
   const [showPwForm, setShowPwForm] = useState(false);
   const [newPw, setNewPw] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -3180,11 +3180,14 @@ function SettingsSheet({ userEmail, goals = [], onEditGoals, onUpdatePassword, o
           <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",margin:"22px 0 10px",fontWeight:700}}>DATA</div>
           <button onClick={onClearAll} style={{background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Clear all data</button>
 
-          {onPreviewPerfectDay && (
+          {(onPreviewPerfectDay || onPreviewPR) && (
             <>
               <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",margin:"22px 0 10px",fontWeight:700}}>FUN</div>
-              <button onClick={onPreviewPerfectDay} style={{background:"transparent",border:`1px solid #22ee6655`,borderRadius:8,color:"#22ee66",padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>⭐ Preview Perfect Day</button>
-              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.6}}>See what the celebration looks like. The real popup auto-fires once a day when you log a workout + 🟢 diet + 🟢 active.</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {onPreviewPerfectDay && <button onClick={onPreviewPerfectDay} style={{background:"transparent",border:`1px solid #22ee6655`,borderRadius:8,color:"#22ee66",padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>⭐ Preview Perfect Day</button>}
+                {onPreviewPR && <button onClick={onPreviewPR} style={{background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>🏆 Preview PR popup</button>}
+              </div>
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.6}}>Perfect Day auto-fires once per day when you log a workout + 🟢 diet + 🟢 active. A real PR fires when a set beats the "PR <value>" chip shown on each exercise during a workout — that chip is your historical best.</div>
             </>
           )}
 
@@ -3227,6 +3230,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPerfectDay, setShowPerfectDay] = useState(false);
+  const [previewPR, setPreviewPR] = useState(null);
   async function hardRefresh() {
     setRefreshing(true);
     try {
@@ -3644,11 +3648,13 @@ export default function App() {
           onSignOut={auth.signOut}
           onClearAll={clearAll}
           onPreviewPerfectDay={()=>{ setShowSettings(false); previewPerfectDay(); }}
+          onPreviewPR={()=>{ setShowSettings(false); setPreviewPR({ exName: "Bench Press", kind: "weight", value: 165, prev: 152, weight: "135", reps: "6" }); }}
           onClose={()=>setShowSettings(false)}
         />
       )}
 
       {showPerfectDay && <PerfectDayCelebration onClose={()=>setShowPerfectDay(false)}/>}
+      {previewPR && <PRCelebration pr={previewPR} onClose={()=>setPreviewPR(null)}/>}
 
       {/* Bottom nav */}
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
