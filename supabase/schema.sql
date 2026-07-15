@@ -231,6 +231,28 @@ create policy "own rows: goal_logs"
   with check (auth.uid() = user_id);
 
 -- ────────────────────────────────────────────────────────────────────────────
+-- GOAL SNAPSHOTS: a timestamped audit trail of the goal list. Every time the
+-- user edits Manage Goals, a row is inserted here. The Trends heatmap uses
+-- these to score past days against the goals that were ACTIVE at the time,
+-- so pruning goals later doesn't retroactively inflate old cells.
+-- ────────────────────────────────────────────────────────────────────────────
+
+create table if not exists public.goal_snapshots (
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  snapshot_at timestamptz not null default now(),
+  goals       jsonb not null,
+  primary key (user_id, snapshot_at)
+);
+create index if not exists goal_snapshots_user_idx on public.goal_snapshots (user_id, snapshot_at);
+
+alter table public.goal_snapshots enable row level security;
+drop policy if exists "own rows: goal_snapshots" on public.goal_snapshots;
+create policy "own rows: goal_snapshots"
+  on public.goal_snapshots for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- ────────────────────────────────────────────────────────────────────────────
 -- ROONEY CONVERSATION: one continuous chat thread per user, so Rooney sees the
 -- full prior conversation every time (true continuity, not just stored facts).
 -- ────────────────────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ import { supabase, supabaseConfigured } from "./lib/supabase";
 import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
   useFocusSessions, useBoards, useCustomExercises, useRooneyMemories,
-  useZone2Log, useSettings, useRooneyConversation, useGoalLogs, useBodyweight, migrateLocalStorage,
+  useZone2Log, useSettings, useRooneyConversation, useGoalLogs, useGoalSnapshots, useBodyweight, migrateLocalStorage,
 } from "./lib/supabaseHooks";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -1263,7 +1263,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
 }
 
 // ─── TRENDS TAB ───────────────────────────────────────────────────────────────
-function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions = [], bodyweight = {}, goals = [], goalLogs = [], customExercises = {} }) {
+function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions = [], bodyweight = {}, goals = [], goalLogs = [], goalSnapshots = [], customExercises = {} }) {
   const today = isoDate();
   const WEEKS_BACK = 8;
   const HEATMAP_WEEKS = 12;
@@ -1357,44 +1357,52 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
   // Heatmap weeks (oldest at top, current at bottom).
   const heatmapWeeks = Array.from({length:HEATMAP_WEEKS},(_,i)=>getWeekDays(-(HEATMAP_WEEKS-1-i)));
 
-  // Did *this* goal show any progress on *this* day? Used to compute the
-  // per-day "% of goals hit" score for the heatmap.
-  function goalHitOnDay(goal, d) {
-    if (goal.kind === "muscle") {
-      const muscles = MUSCLE_GROUPS[goal.group] || [];
-      return history.some(w => {
-        if (isoDate(new Date(w.date)) !== d) return false;
-        return (w.exercises || []).some(ex => {
-          const m = muscleOfEx(ex.exId, customExercises);
-          const cat = catOfEx(ex.exId, customExercises);
-          return (m && muscles.includes(m)) || cat === goal.group;
-        });
-      });
+  // Trailing 7 days ending on d (inclusive). Used for the "were the past 7
+  // days on track" heatmap score.
+  function trailing7(d) {
+    const out = [];
+    for (let i = 6; i >= 0; i--) {
+      const dt = new Date(d + "T12:00:00");
+      dt.setDate(dt.getDate() - i);
+      out.push(isoDate(dt));
     }
-    if (goal.kind === "workouts")     return wkSet.has(d);
-    if (goal.kind === "zone2")        return zone2Log.some(z => z.date === d && (z.minutes || 0) > 0);
-    if (goal.kind === "diet_green")   return dietLog[d] === "green";
-    if (goal.kind === "active_green") return activeLog[d] === "green";
-    if (goal.kind === "diet_red")     return dietLog[d] !== "red";   // "hit" = you didn't cheat that day
-    if (goal.kind === "habit")        return goalLogs.some(l => l.goal_id === goal.id && l.date === d && l.completed);
-    if (goal.kind === "timed")        return goalLogs.some(l => l.goal_id === goal.id && l.date === d && (l.value || 0) > 0);
-    if (goal.kind === "perfect_days") return wkSet.has(d) && dietLog[d] === "green" && activeLog[d] === "green";
-    return false;
+    return out;
   }
-  function dayHasAnyData(d) {
-    if (dietLog[d] || activeLog[d]) return true;
-    if (wkSet.has(d)) return true;
-    if (zone2Log.some(z => z.date === d)) return true;
-    if (goalLogs.some(l => l.date === d)) return true;
-    return false;
+  function anyDataInWindow(days) {
+    return days.some(dw => {
+      if (dietLog[dw] || activeLog[dw]) return true;
+      if (wkSet.has(dw)) return true;
+      if (zone2Log.some(z => z.date === dw)) return true;
+      if (goalLogs.some(l => l.date === dw)) return true;
+      return false;
+    });
   }
-  // Returns -1 future, -2 no goals set, -3 no data logged, or 0–100 %.
+  // Which goal list was ACTIVE on this day? Uses timestamped snapshots so
+  // changing goals now doesn't rewrite past cells. Snapshots is [{snapshot_at, goals}]
+  // ordered ascending. Fallback to current goals when no snapshot covers the day.
+  function goalsAsOf(d) {
+    const snaps = Array.isArray(goalSnapshots) ? goalSnapshots : [];
+    if (snaps.length === 0) return goalListNorm;
+    const endOfDay = new Date(d + "T23:59:59.999").toISOString();
+    let picked = null;
+    for (const s of snaps) if (s.snapshot_at <= endOfDay) picked = s;
+    // Before the earliest snapshot, use the earliest one (best proxy — a day
+    // before we tracked history probably had the same goals as when we started).
+    if (!picked) picked = snaps[0];
+    return (Array.isArray(picked.goals) ? picked.goals : []).map(normalizeGoal).filter(g => g.active !== false);
+  }
+  // Returns -1 future, -2 no goals, -3 no data in the trailing week, or 0–100.
+  // The score is % of ACTIVE-AT-THAT-TIME weekly goals that were hit over
+  // the 7 days ending on d.
   function dayPct(d) {
     if (d > today) return -1;
-    if (goalListNorm.length === 0) return -2;
-    if (!dayHasAnyData(d)) return -3;
-    const hit = goalListNorm.reduce((n, g) => n + (goalHitOnDay(g, d) ? 1 : 0), 0);
-    return Math.round((hit / goalListNorm.length) * 100);
+    const activeGoals = goalsAsOf(d);
+    if (activeGoals.length === 0) return -2;
+    const weekDays = trailing7(d);
+    if (!anyDataInWindow(weekDays)) return -3;
+    const ctx = { history, dietLog, activeLog, zone2Log, goalLogs, weekDays, customExercises };
+    const hit = activeGoals.reduce((n, g) => n + (computeGoalProgress(g, ctx).hit ? 1 : 0), 0);
+    return Math.round((hit / activeGoals.length) * 100);
   }
   // Andrew's spec: 0–30 red, gradient up, 80+ green, 90+ good green, 100 deep green.
   function cellColor(v) {
@@ -1457,7 +1465,7 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
           the best at-a-glance summary of consistency. */}
       <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>12-WEEK CONSISTENCY</div>
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
-        <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:10,lineHeight:1.5}}>Each square shows the % of that day's active goals you had activity for. Squares turn green as you hit more; the darker the green, the more perfect.</div>
+        <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:10,lineHeight:1.5}}>Each square shows the % of your weekly goals hit over the 7 days ending on that day. Snapshots of your goal list are saved when you edit — past cells stay honest.</div>
         <div style={{display:"grid",gridTemplateColumns:"36px repeat(7, 1fr)",gap:4,alignItems:"center"}}>
           <div/>
           {["M","T","W","T","F","S","S"].map((l,i)=><div key={i} style={{textAlign:"center",fontSize:8,color:C.dim,fontFamily:MONO,letterSpacing:"0.05em"}}>{l}</div>)}
@@ -3287,6 +3295,7 @@ export default function App() {
   const settingsState = useSettings(userId, DEFAULT_GOAL_LIST);
   const convoState    = useRooneyConversation(userId);
   const goalLogsState = useGoalLogs(userId);
+  const goalSnapsState = useGoalSnapshots(userId);
   const bwState       = useBodyweight(userId);
 
   // UI state
@@ -3317,7 +3326,12 @@ export default function App() {
   const goalList = (settingsState.goals && settingsState.goals.length ? settingsState.goals : DEFAULT_GOAL_LIST)
     .filter(g => g.kind !== "perfect_days")
     .map(normalizeGoal);
-  const setGoalList = settingsState.setGoals;
+  // Every goal-list edit also records a timestamped snapshot so the Trends
+  // heatmap can evaluate past days against the goals that were ACTIVE at the time.
+  async function setGoalList(nextGoals) {
+    await settingsState.setGoals(nextGoals);
+    goalSnapsState.saveSnapshot(nextGoals);
+  }
   const zone2Log = zone2State.data;
   const goalLogs = goalLogsState.data;
 
@@ -3664,7 +3678,7 @@ export default function App() {
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks} onUpdateTask={updateTask}/>}
-        {tab==="trends" && <TrendsTab history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} focusSessions={focusSessions} bodyweight={bwState.data} goals={goalList} goalLogs={goalLogs} customExercises={customExercises}/>}
+        {tab==="trends" && <TrendsTab history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} focusSessions={focusSessions} bodyweight={bwState.data} goals={goalList} goalLogs={goalLogs} goalSnapshots={goalSnapsState.snapshots} customExercises={customExercises}/>}
       </div>
 
       {/* Rooney floating button */}

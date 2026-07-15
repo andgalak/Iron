@@ -513,6 +513,32 @@ export function useGoalLogs(userId) {
   return { data, loading, toggle, setValue };
 }
 
+// ─── GOAL SNAPSHOTS (timestamped audit trail so past heatmap cells stay honest)
+export function useGoalSnapshots(userId) {
+  const [snapshots, setSnapshots] = useState([]); // [{ user_id, snapshot_at, goals }, ...] ascending
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    supabase.from("goal_snapshots").select("*").eq("user_id", userId).order("snapshot_at", { ascending: true })
+      .then(({ data, error }) => {
+        if (error) { console.error("goal_snapshots load:", error); warnIfSchemaMissing(error, "goal history"); }
+        setSnapshots(data || []);
+        setLoading(false);
+      });
+  }, [userId]);
+
+  async function saveSnapshot(goals) {
+    const snapshot_at = new Date().toISOString();
+    const row = { user_id: userId, snapshot_at, goals };
+    setSnapshots(s => [...s, row]);
+    const { error } = await supabase.from("goal_snapshots").insert(row);
+    if (error) { console.error("goal_snapshots insert:", error); warnIfSchemaMissing(error, "goal history"); }
+  }
+
+  return { snapshots, loading, saveSnapshot };
+}
+
 // ─── BODY WEIGHT (one measurement per day, in lbs) ────────────────────────────
 export function useBodyweight(userId) {
   const [data, setData] = useState({}); // { "YYYY-MM-DD": number }
