@@ -957,9 +957,8 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging }) {
       display: "flex", alignItems: "flex-start", gap: 8,
       boxShadow: dragging ? "0 8px 24px rgba(0,0,0,0.5)" : "none",
     }}>
-      {/* Drag handle — the only place that initiates a drag, so taps elsewhere still work */}
-      <span {...(dragHandleProps || {})} aria-label="Drag to reorder" title="Drag to reorder"
-        style={{ flexShrink: 0, width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 15, cursor: "grab", touchAction: "none", lineHeight: 1, marginTop: 0 }}>⠿</span>
+      {/* Grip icon — the whole card is draggable now, so this is just a visual affordance. */}
+      <span aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 15, cursor: "grab", lineHeight: 1, marginTop: 0, pointerEvents: "none" }}>⠿</span>
       {lane === "Today" && (
         <button aria-label="Complete task" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggle && onToggle(card.id); }}
           style={{ flexShrink: 0, width: 22, height: 22, padding: 0, background: "transparent", border: "none", cursor: "pointer", marginTop: 1 }}>
@@ -984,10 +983,13 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging }) {
 
 function SortableTaskCard({ card, lane, onToggle, onOpenMenu }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id });
-  const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+  const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.4 : 1, cursor: isDragging ? "grabbing" : "grab", touchAction: "manipulation" };
+  // Drag listeners on the OUTER card so users can grab anywhere (not just ⠿).
+  // Mouse: 5px movement threshold means short clicks still open the menu.
+  // Touch: 180ms press-hold delay means scrolls & taps still work.
   return (
-    <div ref={setNodeRef} style={style} onClick={()=>onOpenMenu(card.id, lane)}>
-      <TaskCardBody card={card} lane={lane} onToggle={onToggle} dragHandleProps={{ ...attributes, ...listeners }} />
+    <div ref={setNodeRef} {...attributes} {...listeners} style={style} onClick={()=>onOpenMenu(card.id, lane)}>
+      <TaskCardBody card={card} lane={lane} onToggle={onToggle} />
     </div>
   );
 }
@@ -1212,7 +1214,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
           {activeId && cardById[activeId] ? <div style={{width:206}}><TaskCardBody card={cardById[activeId]} lane={findLane(activeId)} dragging /></div> : null}
         </DragOverlay>
       </DndContext>
-      <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>Drag the ⠿ handle to reorder a task or move it between lanes (press and hold on mobile). Tap a task for more options. Today tasks show on your Home checklist.</div>
+      <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>Click-and-drag any card to reorder or move between lanes (press-and-hold on mobile). Tap a card for more options. Today tasks show on your Home checklist.</div>
 
       {/* Card action sheet (move / complete / delete) */}
       {menuCard && (() => {
@@ -2688,7 +2690,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
+            model: "claude-sonnet-4-5-20250929",
             max_tokens: 1500,
             system: systemPrompt,
             tools: ROONEY_TOOLS,
@@ -3597,7 +3599,7 @@ export default function App() {
   ];
 
   return (
-    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:480,margin:"0 auto",position:"relative"}}>
+    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:760,margin:"0 auto",position:"relative"}}>
 
       {/* Top bar */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 18px",paddingTop:"calc(12px + env(safe-area-inset-top))",position:"sticky",top:0,zIndex:25,background:C.bg+"f2",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderBottom:`1px solid ${C.border}`}}>
@@ -3686,7 +3688,7 @@ export default function App() {
       {previewPR && <PRCelebration pr={previewPR} onClose={()=>setPreviewPR(null)}/>}
 
       {/* Bottom nav */}
-      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:760,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
         {TABS.map(t=>{
           const active = tab===t.key;
           return (
