@@ -1354,28 +1354,64 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
     );
   }
 
-  // Heatmap weeks (oldest at top, current at bottom)
+  // Heatmap weeks (oldest at top, current at bottom).
   const heatmapWeeks = Array.from({length:HEATMAP_WEEKS},(_,i)=>getWeekDays(-(HEATMAP_WEEKS-1-i)));
-  function dayScore(d) {
-    if (d > today) return -1;                              // future
-    const w  = wkSet.has(d) ? 1 : 0;
-    const dt = dietLog[d]==="green" ? 1 : 0;
-    const ac = activeLog[d]==="green" ? 1 : 0;
-    const score = w + dt + ac;
-    if (score > 0) return score;                           // 1..3
-    if (dietLog[d] === "red") return -2;                   // red diet only
-    return 0;                                              // empty
+
+  // Did *this* goal show any progress on *this* day? Used to compute the
+  // per-day "% of goals hit" score for the heatmap.
+  function goalHitOnDay(goal, d) {
+    if (goal.kind === "muscle") {
+      const muscles = MUSCLE_GROUPS[goal.group] || [];
+      return history.some(w => {
+        if (isoDate(new Date(w.date)) !== d) return false;
+        return (w.exercises || []).some(ex => {
+          const m = muscleOfEx(ex.exId, customExercises);
+          const cat = catOfEx(ex.exId, customExercises);
+          return (m && muscles.includes(m)) || cat === goal.group;
+        });
+      });
+    }
+    if (goal.kind === "workouts")     return wkSet.has(d);
+    if (goal.kind === "zone2")        return zone2Log.some(z => z.date === d && (z.minutes || 0) > 0);
+    if (goal.kind === "diet_green")   return dietLog[d] === "green";
+    if (goal.kind === "active_green") return activeLog[d] === "green";
+    if (goal.kind === "diet_red")     return dietLog[d] !== "red";   // "hit" = you didn't cheat that day
+    if (goal.kind === "habit")        return goalLogs.some(l => l.goal_id === goal.id && l.date === d && l.completed);
+    if (goal.kind === "timed")        return goalLogs.some(l => l.goal_id === goal.id && l.date === d && (l.value || 0) > 0);
+    if (goal.kind === "perfect_days") return wkSet.has(d) && dietLog[d] === "green" && activeLog[d] === "green";
+    return false;
   }
-  // Friendlier partial credit: 2/3 reads green-ish (you did most of it),
-  // 1/3 stays warm orange, 3/3 is vivid, red-diet-only is the only "bad" red.
-  function cellColor(score) {
-    if (score === -1) return "transparent";       // future
-    if (score === -2) return "#dc2626bb";         // red diet only — aggressive
-    if (score === 0)  return C.border;            // empty / not logged
-    if (score === 1)  return "#FF6B35aa";         // 1/3 — warm orange
-    if (score === 2)  return "#86efacaa";         // 2/3 — light green (was orange)
-    if (score === 3)  return "#22ee66";           // 3/3 — vivid green
-    return C.border;
+  function dayHasAnyData(d) {
+    if (dietLog[d] || activeLog[d]) return true;
+    if (wkSet.has(d)) return true;
+    if (zone2Log.some(z => z.date === d)) return true;
+    if (goalLogs.some(l => l.date === d)) return true;
+    return false;
+  }
+  // Returns -1 future, -2 no goals set, -3 no data logged, or 0–100 %.
+  function dayPct(d) {
+    if (d > today) return -1;
+    if (goalListNorm.length === 0) return -2;
+    if (!dayHasAnyData(d)) return -3;
+    const hit = goalListNorm.reduce((n, g) => n + (goalHitOnDay(g, d) ? 1 : 0), 0);
+    return Math.round((hit / goalListNorm.length) * 100);
+  }
+  // Andrew's spec: 0–30 red, gradient up, 80+ green, 90+ good green, 100 deep green.
+  function cellColor(v) {
+    if (v === -1 || v === -2 || v === -3) return v === -1 ? "transparent" : C.border;
+    if (v >= 100) return "#14a34a";   // perfect — deep saturated green
+    if (v >= 90)  return "#22c55e";   // 90–99 — good green
+    if (v >= 80)  return "#4ade80";   // 80–89 — green (still solid)
+    if (v >= 70)  return "#86efac";   // 70–79 — light green
+    if (v >= 50)  return "#fbbf24";   // 50–69 — amber
+    if (v >= 30)  return "#f87171";   // 30–49 — soft red
+    return "#dc2626";                 // 0–29 — aggressive red
+  }
+  function cellTitle(v, d) {
+    if (v === -1) return `${d} · future`;
+    if (v === -2) return `${d} · no goals set`;
+    if (v === -3) return `${d} · no data`;
+    return `${d} · ${v}% of goals hit`;
   }
 
   // Per-week bar chart card (reused for every metric)
@@ -1417,6 +1453,38 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
         <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>How you're trending across the last 8–12 weeks. Body weight comes from the Iron tab's Past days calendar.</div>
       </div>
 
+      {/* 12-week heatmap — daily % of goals hit. Moved to the top since it's
+          the best at-a-glance summary of consistency. */}
+      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>12-WEEK CONSISTENCY</div>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+        <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:10,lineHeight:1.5}}>Each square shows the % of that day's active goals you had activity for. Squares turn green as you hit more; the darker the green, the more perfect.</div>
+        <div style={{display:"grid",gridTemplateColumns:"36px repeat(7, 1fr)",gap:4,alignItems:"center"}}>
+          <div/>
+          {["M","T","W","T","F","S","S"].map((l,i)=><div key={i} style={{textAlign:"center",fontSize:8,color:C.dim,fontFamily:MONO,letterSpacing:"0.05em"}}>{l}</div>)}
+          {heatmapWeeks.map((wk,wi)=>(
+            <Fragment key={wi}>
+              <div style={{fontSize:8,color:C.dim,fontFamily:MONO,textAlign:"right",paddingRight:4}}>{new Date(wk[0]+"T12:00:00").toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}</div>
+              {wk.map((d, di)=>{
+                const v = dayPct(d);
+                const isToday = d === today;
+                return (
+                  <div key={d+di} title={cellTitle(v,d)}
+                    style={{aspectRatio:"1/1",borderRadius:3,background:cellColor(v),border:isToday?`1.5px solid ${C.accent}`:`1px solid ${C.border}`,minHeight:14}}/>
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:10,marginTop:12,fontSize:9,color:C.muted,fontFamily:MONO,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#14a34a",borderRadius:2,display:"inline-block"}}/>100%</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#22c55e",borderRadius:2,display:"inline-block"}}/>90+</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#4ade80",borderRadius:2,display:"inline-block"}}/>80+</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#fbbf24",borderRadius:2,display:"inline-block"}}/>50+</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#dc2626",borderRadius:2,display:"inline-block"}}/>&lt;30</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.border,borderRadius:2,display:"inline-block"}}/>No data</span>
+        </div>
+      </div>
+
       {/* Body weight */}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:16,marginBottom:16}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
@@ -1455,35 +1523,6 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
       <MiniBars label="ZONE 2 / WEEK"       values={metrics.map(m=>m.z2)}        max={Math.max(60,  ...metrics.map(m=>m.z2))} color={C.blue} goalLine={targetByKind.zone2}  format={v=>v?`${v}m`:"—"}/>
       <MiniBars label="FOCUS HOURS / WEEK"  values={metrics.map(m=>m.fm)}        max={Math.max(120, ...metrics.map(m=>m.fm))} color={C.blue} format={v=>v?`${Math.round(v/60*10)/10}h`:"—"}/>
       <MiniBars label="GOAL HIT %"          values={weeklyGoalPct}                max={100} color={C.accent} format={v=>`${v}%`}/>
-
-      {/* 12-week heatmap */}
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginTop:18,marginBottom:8,fontWeight:700}}>12-WEEK HEATMAP</div>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
-        <div style={{display:"grid",gridTemplateColumns:"36px repeat(7, 1fr)",gap:4,alignItems:"center"}}>
-          <div/>
-          {["M","T","W","T","F","S","S"].map((l,i)=><div key={i} style={{textAlign:"center",fontSize:8,color:C.dim,fontFamily:MONO,letterSpacing:"0.05em"}}>{l}</div>)}
-          {heatmapWeeks.map((wk,wi)=>(
-            <Fragment key={wi}>
-              <div style={{fontSize:8,color:C.dim,fontFamily:MONO,textAlign:"right",paddingRight:4}}>{new Date(wk[0]+"T12:00:00").toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}</div>
-              {wk.map((d, di)=>{
-                const score = dayScore(d);
-                const isToday = d === today;
-                return (
-                  <div key={d+di} title={`${d}${score>=1?` · ${score}/3`:score===-2?" · red diet":score===-1?" · future":" · empty"}`}
-                    style={{aspectRatio:"1/1",borderRadius:3,background:cellColor(score),border:isToday?`1.5px solid ${C.accent}`:`1px solid ${C.border}`,minHeight:14}}/>
-                );
-              })}
-            </Fragment>
-          ))}
-        </div>
-        <div style={{display:"flex",gap:10,marginTop:12,fontSize:9,color:C.muted,fontFamily:MONO,alignItems:"center",flexWrap:"wrap"}}>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#22ee66",borderRadius:2,display:"inline-block"}}/>Perfect (3/3)</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#86efacaa",borderRadius:2,display:"inline-block"}}/>2/3</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#FF6B35aa",borderRadius:2,display:"inline-block"}}/>1/3</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#dc2626bb",borderRadius:2,display:"inline-block"}}/>Red diet</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.border,borderRadius:2,display:"inline-block"}}/>Empty</span>
-        </div>
-      </div>
 
       {/* Per-goal weekly history */}
       <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginTop:18,marginBottom:8,fontWeight:700}}>PER-GOAL HISTORY</div>
