@@ -1354,8 +1354,47 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
     );
   }
 
-  // Heatmap weeks (oldest at top, current at bottom).
-  const heatmapWeeks = Array.from({length:HEATMAP_WEEKS},(_,i)=>getWeekDays(-(HEATMAP_WEEKS-1-i)));
+  // Earliest day with ANY logged data across all sources — heatmap starts here
+  // so we don't fake red on pre-app-usage days.
+  const firstDataDay = (() => {
+    const dates = [];
+    history.forEach(w => dates.push(isoDate(new Date(w.date))));
+    Object.keys(dietLog || {}).forEach(d => dates.push(d));
+    Object.keys(activeLog || {}).forEach(d => dates.push(d));
+    zone2Log.forEach(z => dates.push(z.date));
+    goalLogs.forEach(l => dates.push(l.date));
+    Object.keys(bodyweight || {}).forEach(d => dates.push(d));
+    if (dates.length === 0) return null;
+    dates.sort();
+    return dates[0];
+  })();
+  function mondayOf(iso) {
+    const d = new Date(iso + "T12:00:00");
+    const monOffset = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - monOffset);
+    return isoDate(d);
+  }
+  // Heatmap weeks: from the Monday containing your first-ever data day through
+  // the current week. No fixed length — the chart grows with your history.
+  const heatmapWeeks = (() => {
+    if (!firstDataDay) return [getWeekDays(0)];
+    const startMonday = mondayOf(firstDataDay);
+    const endMonday = mondayOf(isoDate());
+    const weeks = [];
+    const cursor = new Date(startMonday + "T12:00:00");
+    const stop = new Date(endMonday + "T12:00:00");
+    while (cursor <= stop) {
+      const wk = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(cursor);
+        d.setDate(cursor.getDate() + i);
+        wk.push(isoDate(d));
+      }
+      weeks.push(wk);
+      cursor.setDate(cursor.getDate() + 7);
+    }
+    return weeks;
+  })();
 
   // Trailing 7 days ending on d (inclusive). Used for the "were the past 7
   // days on track" heatmap score.
@@ -1404,9 +1443,16 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
     const hit = activeGoals.reduce((n, g) => n + (computeGoalProgress(g, ctx).hit ? 1 : 0), 0);
     return Math.round((hit / activeGoals.length) * 100);
   }
+  // A day is "hidden" (blank, no border) if it's future, before your first
+  // logged day, or fell in a trailing week with no data at all.
+  function isDayHidden(d, v) {
+    if (v === -1 || v === -3) return true;
+    if (firstDataDay && d < firstDataDay) return true;
+    return false;
+  }
   // Andrew's spec: 0–30 red, gradient up, 80+ green, 90+ good green, 100 deep green.
   function cellColor(v) {
-    if (v === -1 || v === -2 || v === -3) return v === -1 ? "transparent" : C.border;
+    if (v === -2) return C.border;    // no goals set
     if (v >= 100) return "#14a34a";   // perfect — deep saturated green
     if (v >= 90)  return "#22c55e";   // 90–99 — good green
     if (v >= 80)  return "#4ade80";   // 80–89 — green (still solid)
@@ -1416,10 +1462,11 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
     return "#dc2626";                 // 0–29 — aggressive red
   }
   function cellTitle(v, d) {
+    if (firstDataDay && d < firstDataDay) return `${d} · before you started`;
     if (v === -1) return `${d} · future`;
     if (v === -2) return `${d} · no goals set`;
     if (v === -3) return `${d} · no data`;
-    return `${d} · ${v}% of goals hit`;
+    return `${d} · ${v}% of weekly goals hit`;
   }
 
   // Per-week bar chart card (reused for every metric)
@@ -1461,35 +1508,69 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
         <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>How you're trending across the last 8–12 weeks. Body weight comes from the Iron tab's Past days calendar.</div>
       </div>
 
-      {/* 12-week heatmap — daily % of goals hit. Moved to the top since it's
-          the best at-a-glance summary of consistency. */}
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>12-WEEK CONSISTENCY</div>
+      {/* Consistency heatmap — daily % of weekly goals hit, most-recent first,
+          grouped by month. Grows from your first-ever logged day. */}
+      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:8,fontWeight:700}}>CONSISTENCY</div>
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
-        <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:10,lineHeight:1.5}}>Each square shows the % of your weekly goals hit over the 7 days ending on that day. Snapshots of your goal list are saved when you edit — past cells stay honest.</div>
-        <div style={{display:"grid",gridTemplateColumns:"36px repeat(7, 1fr)",gap:4,alignItems:"center"}}>
+        <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginBottom:12,lineHeight:1.5}}>Each square shows the % of your weekly goals hit over the 7 days ending on that day. Most recent week is at the top. Cells before you started using the app are hidden.</div>
+        {/* Day-of-week header (always visible) */}
+        <div style={{display:"grid",gridTemplateColumns:"48px repeat(7, 1fr)",gap:4,marginBottom:6}}>
           <div/>
-          {["M","T","W","T","F","S","S"].map((l,i)=><div key={i} style={{textAlign:"center",fontSize:8,color:C.dim,fontFamily:MONO,letterSpacing:"0.05em"}}>{l}</div>)}
-          {heatmapWeeks.map((wk,wi)=>(
-            <Fragment key={wi}>
-              <div style={{fontSize:8,color:C.dim,fontFamily:MONO,textAlign:"right",paddingRight:4}}>{new Date(wk[0]+"T12:00:00").toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}</div>
-              {wk.map((d, di)=>{
-                const v = dayPct(d);
-                const isToday = d === today;
-                return (
-                  <div key={d+di} title={cellTitle(v,d)}
-                    style={{aspectRatio:"1/1",borderRadius:3,background:cellColor(v),border:isToday?`1.5px solid ${C.accent}`:`1px solid ${C.border}`,minHeight:14}}/>
-                );
-              })}
-            </Fragment>
-          ))}
+          {["M","T","W","T","F","S","S"].map((l,i)=><div key={i} style={{textAlign:"center",fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.05em",fontWeight:700}}>{l}</div>)}
         </div>
+        {/* Weeks — reversed so newest is on top, grouped by month with a header */}
+        {(() => {
+          const displayWeeks = [...heatmapWeeks].reverse();
+          const rows = [];
+          let prevMonthKey = null;
+          const thisYear = new Date().getFullYear();
+          displayWeeks.forEach((wk, wi) => {
+            const mondayD = new Date(wk[0] + "T12:00:00");
+            const monthKey = `${mondayD.getFullYear()}-${mondayD.getMonth()}`;
+            if (monthKey !== prevMonthKey) {
+              const label = mondayD.toLocaleDateString("en-US", mondayD.getFullYear() === thisYear ? { month: "long" } : { month: "long", year: "numeric" });
+              rows.push({ kind: "monthHeader", label, key: monthKey });
+              prevMonthKey = monthKey;
+            }
+            rows.push({ kind: "week", days: wk, wi });
+          });
+          return rows.map(row => {
+            if (row.kind === "monthHeader") {
+              return (
+                <div key={"m-"+row.key} style={{fontSize:11,fontWeight:700,color:C.accent,fontFamily:MONO,letterSpacing:"0.08em",margin:"12px 0 6px 0",paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>{row.label.toUpperCase()}</div>
+              );
+            }
+            const wk = row.days;
+            return (
+              <div key={"w-"+row.wi} style={{display:"grid",gridTemplateColumns:"48px repeat(7, 1fr)",gap:4,marginBottom:4,alignItems:"center"}}>
+                <div style={{fontSize:9,color:C.dim,fontFamily:MONO,textAlign:"right",paddingRight:6}}>{new Date(wk[0]+"T12:00:00").toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}</div>
+                {wk.map((d, di) => {
+                  const v = dayPct(d);
+                  const isToday = d === today;
+                  const hidden = isDayHidden(d, v);
+                  return (
+                    <div key={d+di} title={cellTitle(v,d)}
+                      style={{
+                        aspectRatio:"1/1",
+                        borderRadius:3,
+                        background: hidden ? "transparent" : cellColor(v),
+                        border: hidden ? "1px solid transparent" : (isToday ? `1.5px solid ${C.accent}` : `1px solid ${C.border}`),
+                        minHeight:14,
+                      }}/>
+                  );
+                })}
+              </div>
+            );
+          });
+        })()}
         <div style={{display:"flex",gap:10,marginTop:12,fontSize:9,color:C.muted,fontFamily:MONO,alignItems:"center",flexWrap:"wrap"}}>
           <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#14a34a",borderRadius:2,display:"inline-block"}}/>100%</span>
           <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#22c55e",borderRadius:2,display:"inline-block"}}/>90+</span>
           <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#4ade80",borderRadius:2,display:"inline-block"}}/>80+</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#86efac",borderRadius:2,display:"inline-block"}}/>70+</span>
           <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#fbbf24",borderRadius:2,display:"inline-block"}}/>50+</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#f87171",borderRadius:2,display:"inline-block"}}/>30+</span>
           <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:"#dc2626",borderRadius:2,display:"inline-block"}}/>&lt;30</span>
-          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,background:C.border,borderRadius:2,display:"inline-block"}}/>No data</span>
         </div>
       </div>
 
