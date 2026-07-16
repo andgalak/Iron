@@ -995,10 +995,14 @@ function SortableTaskCard({ card, lane, onToggle, onOpenMenu }) {
 }
 
 // A lane is a droppable so cards can be dropped into it even when empty.
+// minHeight ensures dnd-kit's collision detection still has a real target
+// when the lane is empty — otherwise "Keep in Mind" (which often has no cards)
+// collapses to ~60px and becomes essentially undroppable.
 function TaskLane({ lane, color, itemIds, count, children, footer }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane });
+  const isEmpty = (itemIds?.length || 0) === 0;
   return (
-    <div ref={setNodeRef} style={{ flexShrink: 0, width: 230, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 12, transition: "border-color 0.15s" }}>
+    <div ref={setNodeRef} style={{ flexShrink: 0, width: 230, minHeight: 300, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 12, transition: "border-color 0.15s", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color, fontFamily: MONO, letterSpacing: "0.06em" }}>{lane.toUpperCase()}</div>
         <span style={{ fontSize: 11, color: C.dim, fontFamily: MONO }}>{count}</span>
@@ -1006,6 +1010,12 @@ function TaskLane({ lane, color, itemIds, count, children, footer }) {
       <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
         {children}
       </SortableContext>
+      {/* Empty-state hint that also visually communicates the drop zone */}
+      {isEmpty && (
+        <div style={{ flex: 1, minHeight: 120, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: C.dim, fontFamily: MONO, textAlign: "center", letterSpacing: "0.03em", padding: "8px 4px", opacity: isOver ? 1 : 0.55 }}>
+          {isOver ? "Drop here" : "Drop cards here"}
+        </div>
+      )}
       {footer}
     </div>
   );
