@@ -872,7 +872,7 @@ function CoffeeMug({ fillPct, running, timeText }) {
   const coffeeTop = "#8B5A2B";
 
   return (
-    <svg viewBox="0 0 120 120" width={120} height={120} style={{display:"block"}}>
+    <svg viewBox="0 0 120 120" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style={{display:"block"}}>
       <defs>
         <linearGradient id="coffeeFill" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={coffeeTop}/>
@@ -1022,6 +1022,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   const [addingLane, setAddingLane] = useState(null); // lane name being added to
   const [newCardText, setNewCardText] = useState("");
   const [newCardDate, setNewCardDate] = useState(""); // optional due date for the new task
+  const [timerBig, setTimerBig] = useState(false);   // click coffee cup → nearly full-screen focus mode
   const [menuCard, setMenuCard] = useState(null); // { id, lane } for the move/action sheet
   const [menuDateEdit, setMenuDateEdit] = useState(false); // schedule mode inside the menu
   const [activeId, setActiveId] = useState(null); // card id currently being dragged
@@ -1114,15 +1115,46 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   return (
     <div style={{padding:"16px 16px 80px"}}>
 
-      {/* Timer */}
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:16}}>
-        <div style={{display:"flex",alignItems:"center",gap:20}}>
-          {/* Coffee mug */}
-          <div style={{position:"relative",flexShrink:0,width:120,height:120}}>
+      {/* Timer — clickable coffee cup expands the card to fill most of the
+          screen so it becomes the focal point. User can still scroll past to
+          reach the task board below. */}
+      <div style={{
+        background: C.card,
+        border: `1px solid ${C.border}`,
+        borderRadius: 16,
+        padding: timerBig ? 24 : 20,
+        marginBottom: 16,
+        position: "relative",
+        minHeight: timerBig ? "85vh" : "auto",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: timerBig ? "center" : "flex-start",
+        transition: "min-height 0.25s ease, padding 0.25s ease",
+      }}>
+        {/* Expand / collapse toggle in the top-right */}
+        <button onClick={()=>setTimerBig(b=>!b)} title={timerBig?"Shrink timer":"Fill screen"}
+          style={{position:"absolute",top:12,right:12,background:"rgba(0,0,0,0.35)",border:`1px solid ${C.border2}`,borderRadius:8,color:C.muted,fontSize:11,cursor:"pointer",padding:"5px 10px",zIndex:2,fontFamily:MONO,lineHeight:1,letterSpacing:"0.05em"}}>
+          {timerBig ? "⤡ Shrink" : "⤢ Focus"}
+        </button>
+
+        <div style={{display:"flex",flexDirection:timerBig?"column":"row",alignItems:"center",gap:timerBig?28:20}}>
+          {/* Coffee mug — click to enter focus mode if compact */}
+          <div
+            onClick={()=>{ if (!timerBig) setTimerBig(true); }}
+            title={timerBig ? "" : "Click to focus"}
+            style={{
+              position: "relative",
+              flexShrink: 0,
+              width:  timerBig ? "min(58vh, 480px)" : 120,
+              height: timerBig ? "min(58vh, 480px)" : 120,
+              cursor: timerBig ? "default" : "pointer",
+              transition: "width 0.25s ease, height 0.25s ease",
+            }}>
             <CoffeeMug fillPct={fillPct} running={running} timeText={formatTime(remaining)}/>
           </div>
 
-          <div style={{flex:1}}>
+          {/* Controls stack — reflows below the cup in focus mode */}
+          <div style={{flex: timerBig?"none":1, width: timerBig?"100%":"auto", maxWidth: timerBig?400:"none"}}>
             <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>SESSION LENGTH</div>
             <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
               {[30,45,60,90,120].map(m=>(
@@ -1138,29 +1170,30 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
           </div>
         </div>
 
-        <div style={{display:"flex",gap:8,marginTop:14}}>
+        <div style={{display:"flex",gap:8,marginTop:timerBig?24:14, ...(timerBig ? { maxWidth: 400, width: "100%", alignSelf: "center" } : {})}}>
           {!running
-            ? <button style={{flex:1,background:C.accent,color:"#000",border:"none",borderRadius:10,padding:"12px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={startTimer}>▶ Start</button>
-            : <button style={{flex:1,background:"#161616",border:`1px solid ${C.border}`,borderRadius:10,padding:"12px",fontSize:13,color:C.text,cursor:"pointer",fontFamily:MONO}} onClick={stopTimer}>◼ Stop + Save</button>
+            ? <button style={{flex:1,background:C.accent,color:"#000",border:"none",borderRadius:10,padding: timerBig?"16px":"12px",fontSize: timerBig?15:13,fontWeight:700,cursor:"pointer",fontFamily:MONO}} onClick={startTimer}>▶ Start</button>
+            : <button style={{flex:1,background:"#161616",border:`1px solid ${C.border}`,borderRadius:10,padding: timerBig?"16px":"12px",fontSize: timerBig?15:13,color:C.text,cursor:"pointer",fontFamily:MONO}} onClick={stopTimer}>◼ Stop + Save</button>
           }
         </div>
 
-        {/* Stats */}
-        <div style={{display:"flex",gap:8,marginTop:12}}>
-          <div style={{flex:1,background:"#161616",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-            <div style={{fontSize:16,fontWeight:700,color:C.blue,fontFamily:MONO}}>{todayMins>0?`${todayMins}m`:"—"}</div>
-            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2}}>TODAY</div>
+        {/* Stats — hidden in focus mode to keep the cup the only real thing on screen */}
+        {!timerBig && (
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <div style={{flex:1,background:"#161616",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+              <div style={{fontSize:16,fontWeight:700,color:C.blue,fontFamily:MONO}}>{todayMins>0?`${todayMins}m`:"—"}</div>
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2}}>TODAY</div>
+            </div>
+            <div style={{flex:1,background:"#161616",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+              <div style={{fontSize:16,fontWeight:700,color:C.blue,fontFamily:MONO}}>{weekMins>0?`${Math.round(weekMins/60*10)/10}h`:"—"}</div>
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2}}>THIS WEEK</div>
+            </div>
+            <div style={{flex:1,background:"#161616",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+              <div style={{fontSize:16,fontWeight:700,color:C.blue,fontFamily:MONO}}>{focusSessions.length}</div>
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2}}>SESSIONS</div>
+            </div>
           </div>
-          <div style={{flex:1,background:"#161616",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-            <div style={{fontSize:16,fontWeight:700,color:C.blue,fontFamily:MONO}}>{weekMins>0?`${Math.round(weekMins/60*10)/10}h`:"—"}</div>
-            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2}}>THIS WEEK</div>
-          </div>
-          <div style={{flex:1,background:"#161616",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-            <div style={{fontSize:16,fontWeight:700,color:C.blue,fontFamily:MONO}}>{focusSessions.length}</div>
-            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:2}}>SESSIONS</div>
-          </div>
-        </div>
-
+        )}
       </div>
 
       {/* Recent sessions */}
