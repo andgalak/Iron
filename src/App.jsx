@@ -3535,7 +3535,18 @@ export default function App() {
     }) })) }));
   }
   function toggleTask(cardId) {
-    updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.map(k => k.id===cardId ? { ...k, done: !k.done } : k) })) }));
+    updateBoard(b => ({ ...b, cols: b.cols.map(c => {
+      const idx = c.cards.findIndex(k => k.id === cardId);
+      if (idx < 0) return c;
+      const card = c.cards[idx];
+      const updated = { ...card, done: !card.done };
+      // On check → drop the card to the bottom of its lane. On uncheck → leave
+      // it in place (usually right where the user just tapped).
+      if (updated.done) {
+        return { ...c, cards: [...c.cards.filter(k => k.id !== cardId), updated] };
+      }
+      return { ...c, cards: c.cards.map(k => k.id === cardId ? updated : k) };
+    }) }));
   }
   function moveTask(cardId, toLaneName) {
     let moved = null;
