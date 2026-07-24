@@ -655,21 +655,23 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
           <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>TODAY</div>
           <button onClick={()=>{setAddingToday(true);}} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:14,cursor:"pointer",padding:"1px 9px",lineHeight:1.2}}>+</button>
         </div>
-        {[...todayTasks].sort((a,b)=>(a.done?1:0)-(b.done?1:0)).map(card=>(
-          <div key={card.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
-            <button aria-label="Complete task" onClick={()=>{ if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(card.id); }}
+        {groupTasksForRender(todayTasks).map(row => row.kind === "header" ? (
+          <div key={row.key} style={{fontSize:9,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,marginTop:12,marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${TASK_CATEGORY_COLOR[row.category]}33`}}>
+            {TASK_CATEGORY_LABEL[row.category]}
+          </div>
+        ) : (
+          <div key={row.key} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
+            <button aria-label="Complete task" onClick={()=>{ if(!row.card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(row.card.id); }}
               style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
               <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
-                <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2" style={{transition:card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
-                {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
+                <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={row.card.done?C.accent:"transparent"} stroke={row.card.done?C.accent:C.muted} strokeWidth="2" style={{transition:row.card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
+                {row.card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
               </svg>
             </button>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,color:card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:card.done?"line-through":"none"}}>{card.text}</div>
-              {/* Overdue context — scheduling lives on Focus, but a red note here
-                  flags a task that was due before today and is still open. */}
-              {card.dueDate && card.dueDate < isoDate() && !card.done && (
-                <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue from {card.dueDate}</div>
+              <div style={{fontSize:13,color:row.card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:row.card.done?"line-through":"none"}}>{row.card.text}</div>
+              {row.card.dueDate && row.card.dueDate < isoDate() && !row.card.done && (
+                <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue from {row.card.dueDate}</div>
               )}
             </div>
           </div>
@@ -933,6 +935,41 @@ function CoffeeMug({ fillPct, running, timeText }) {
 // ─── Kanban drag-and-drop pieces (Trello-style, touch-friendly via @dnd-kit) ──
 const TASK_LANES = ["Today", "In Progress", "Keep in Mind"];
 const TASK_LANE_COLOR = { "Today": C.accent, "In Progress": C.blue, "Keep in Mind": C.muted };
+// Categorize tasks so Work always renders above Personal. Legacy cards with no
+// category default to "personal".
+const TASK_CATEGORIES = ["work", "personal"];
+const TASK_CATEGORY_LABEL = { work: "WORK", personal: "PERSONAL" };
+const TASK_CATEGORY_COLOR = { work: C.accent, personal: C.blue };
+function taskCategoryOf(card) {
+  return card?.category === "work" ? "work" : "personal";
+}
+// Display order: work section first, then personal. Within each category,
+// active cards on top, done cards sink to the bottom. Stable — preserves manual
+// order (from drag) within each [category, done] group.
+function sortTasksForDisplay(cards) {
+  return [...cards].sort((a, b) => {
+    const ca = taskCategoryOf(a) === "work" ? 0 : 1;
+    const cb = taskCategoryOf(b) === "work" ? 0 : 1;
+    if (ca !== cb) return ca - cb;
+    return (a.done ? 1 : 0) - (b.done ? 1 : 0);
+  });
+}
+// Walk a sorted card list and emit an inline "section header" whenever the
+// category changes, so lane rendering can show WORK / PERSONAL dividers.
+function groupTasksForRender(cards) {
+  const sorted = sortTasksForDisplay(cards);
+  const out = [];
+  let lastCat = null;
+  for (const c of sorted) {
+    const cat = taskCategoryOf(c);
+    if (cat !== lastCat) {
+      out.push({ kind: "header", category: cat, key: "h-" + cat });
+      lastCat = cat;
+    }
+    out.push({ kind: "card", card: c, key: "c-" + c.id });
+  }
+  return out;
+}
 // "Wed", "tmrw", "today", "May 30", or "overdue" — used on task date badges.
 function taskDueLabel(iso) {
   if (!iso) return "";
@@ -1002,7 +1039,7 @@ function TaskLane({ lane, color, itemIds, count, children, footer }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane });
   const isEmpty = (itemIds?.length || 0) === 0;
   return (
-    <div ref={setNodeRef} style={{ flexShrink: 0, width: 230, minHeight: 300, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 12, transition: "border-color 0.15s", display: "flex", flexDirection: "column" }}>
+    <div ref={setNodeRef} style={{ flexShrink: 0, width: 280, minHeight: 340, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 14, transition: "border-color 0.15s", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color, fontFamily: MONO, letterSpacing: "0.06em" }}>{lane.toUpperCase()}</div>
         <span style={{ fontSize: 11, color: C.dim, fontFamily: MONO }}>{count}</span>
@@ -1032,6 +1069,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   const [addingLane, setAddingLane] = useState(null); // lane name being added to
   const [newCardText, setNewCardText] = useState("");
   const [newCardDate, setNewCardDate] = useState(""); // optional due date for the new task
+  const [newCardCat, setNewCardCat] = useState("personal"); // category picker: work vs personal
   const [timerBig, setTimerBig] = useState(false);   // click coffee cup → nearly full-screen focus mode
   const [menuCard, setMenuCard] = useState(null); // { id, lane } for the move/action sheet
   const [menuDateEdit, setMenuDateEdit] = useState(false); // schedule mode inside the menu
@@ -1115,8 +1153,8 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
 
   function submitCard(laneName) {
     if (!newCardText.trim()) return;
-    onAddTask(laneName, newCardText, newCardDate || null);
-    setNewCardText(""); setNewCardDate(""); setAddingLane(null);
+    onAddTask(laneName, newCardText, newCardDate || null, newCardCat);
+    setNewCardText(""); setNewCardDate(""); setNewCardCat("personal"); setAddingLane(null);
   }
 
   // Coffee mug fill: 1 = full, 0 = empty
@@ -1226,28 +1264,43 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
           {LANES.map(lane=>{
             const lc = laneColor[lane];
             const cards = laneCards(lane);
+            const rows = groupTasksForRender(cards);
+            const sortedIds = rows.filter(r=>r.kind==="card").map(r=>r.card.id);
             return (
-              <TaskLane key={lane} lane={lane} color={lc} itemIds={cards.map(c=>c.id)} count={cards.length}
+              <TaskLane key={lane} lane={lane} color={lc} itemIds={sortedIds} count={cards.length}
                 footer={
                   addingLane===lane
                     ? <div>
+                        {/* Category picker — sits above the text so it's the first choice. */}
+                        <div style={{display:"flex",gap:4,marginBottom:6}}>
+                          {TASK_CATEGORIES.map(cat => (
+                            <button key={cat} onClick={()=>setNewCardCat(cat)}
+                              style={{flex:1,background:newCardCat===cat?TASK_CATEGORY_COLOR[cat]+"22":"transparent",color:newCardCat===cat?TASK_CATEGORY_COLOR[cat]:C.muted,border:`1px solid ${newCardCat===cat?TASK_CATEGORY_COLOR[cat]:C.border2}`,borderRadius:6,padding:"5px",fontSize:10,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em",fontWeight:newCardCat===cat?700:400}}>
+                              {TASK_CATEGORY_LABEL[cat]}
+                            </button>
+                          ))}
+                        </div>
                         <textarea style={{width:"100%",background:"#1a1a1a",border:`1px solid ${lc}`,borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,fontFamily:MONO,outline:"none",resize:"none",boxSizing:"border-box",minHeight:56}}
                           autoFocus value={newCardText} onChange={e=>setNewCardText(e.target.value)}
-                          onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submitCard(lane);}if(e.key==="Escape"){setAddingLane(null);setNewCardText("");setNewCardDate("");}}}
+                          onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submitCard(lane);}if(e.key==="Escape"){setAddingLane(null);setNewCardText("");setNewCardDate("");setNewCardCat("personal");}}}
                           placeholder={lane==="Today" && newCardDate ? `Task for ${taskDueLabel(newCardDate)}…` : "Task…"}/>
                         <input type="date" min={isoDate()} value={newCardDate} onChange={e=>setNewCardDate(e.target.value)}
                           title="Schedule for a future day (blank = no date)"
                           style={{width:"100%",marginTop:6,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:6,color:newCardDate?lc:C.muted,padding:"6px 8px",fontSize:11,fontFamily:MONO,outline:"none",colorScheme:"dark",boxSizing:"border-box"}}/>
                         <div style={{display:"flex",gap:6,marginTop:6}}>
                           <button style={{flex:1,background:lc,color:"#000",border:"none",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer",fontFamily:MONO,fontWeight:700}} onClick={()=>submitCard(lane)}>Add</button>
-                          <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAddingLane(null);setNewCardText("");setNewCardDate("");}}>Cancel</button>
+                          <button style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px",fontSize:11,color:C.muted,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setAddingLane(null);setNewCardText("");setNewCardDate("");setNewCardCat("personal");}}>Cancel</button>
                         </div>
                       </div>
                     : <button style={{width:"100%",background:"transparent",border:`1px dashed ${C.border2}`,borderRadius:8,padding:"7px",fontSize:11,color:C.dim,cursor:"pointer",fontFamily:MONO,marginTop:2}}
-                        onClick={()=>{setAddingLane(lane);setNewCardText("");setNewCardDate("");}}>+ Add task</button>
+                        onClick={()=>{setAddingLane(lane);setNewCardText("");setNewCardDate("");setNewCardCat("personal");}}>+ Add task</button>
                 }>
-                {cards.map(card=>(
-                  <SortableTaskCard key={card.id} card={card} lane={lane} onToggle={onToggleTask} onOpenMenu={(id,ln)=>setMenuCard({id,lane:ln})} />
+                {rows.map(row => row.kind === "header" ? (
+                  <div key={row.key} style={{fontSize:9,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,margin:"10px 0 4px 4px",paddingBottom:3,borderBottom:`1px solid ${TASK_CATEGORY_COLOR[row.category]}33`}}>
+                    {TASK_CATEGORY_LABEL[row.category]}
+                  </div>
+                ) : (
+                  <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask} onOpenMenu={(id,ln)=>setMenuCard({id,lane:ln})} />
                 ))}
               </TaskLane>
             );
@@ -1271,6 +1324,20 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                 <div style={{fontSize:11,color:card.dueDate<isoDate()?C.red:card.dueDate===isoDate()?C.accent:C.muted,fontFamily:MONO,marginBottom:8}}>📅 {taskDueLabel(card.dueDate)} <span style={{color:C.dim}}>· {card.dueDate}</span></div>
               )}
               <div style={{paddingBottom:12,marginBottom:14,borderBottom:`1px solid ${C.border}`}}/>
+
+              {/* Category */}
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>CATEGORY</div>
+              <div style={{display:"flex",gap:6,marginBottom:14}}>
+                {TASK_CATEGORIES.map(cat => {
+                  const active = taskCategoryOf(card) === cat;
+                  return (
+                    <button key={cat} onClick={()=>{ if (onUpdateTask) onUpdateTask(menuCard.id, { category: cat }); }}
+                      style={{flex:1,background:active?TASK_CATEGORY_COLOR[cat]+"22":"transparent",border:`1px solid ${active?TASK_CATEGORY_COLOR[cat]:C.border}`,borderRadius:8,color:active?TASK_CATEGORY_COLOR[cat]:C.text,padding:"11px",fontSize:12,fontFamily:MONO,cursor:"pointer",fontWeight:active?700:400,letterSpacing:"0.05em"}}>
+                      {TASK_CATEGORY_LABEL[cat]}
+                    </button>
+                  );
+                })}
+              </div>
 
               {/* Schedule */}
               <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>SCHEDULE</div>
@@ -3518,9 +3585,9 @@ export default function App() {
   const todayTasks = (board?.cols?.find(c => c.name === "Today")?.cards || [])
     .filter(k => !k.dueDate || k.dueDate <= todayISO);
   function updateBoard(mutator) { setBoards(bs => bs.map((b,i) => i===0 ? mutator(b) : b)); }
-  function addTask(laneName, text, dueDate = null) {
+  function addTask(laneName, text, dueDate = null, category = "personal") {
     if (!text.trim() || !board) return;
-    const card = { id: uid(), text: text.trim(), tags: [], done: false };
+    const card = { id: uid(), text: text.trim(), tags: [], done: false, category };
     if (dueDate) card.dueDate = dueDate;
     updateBoard(b => ({ ...b, cols: b.cols.map(c => c.name===laneName ? { ...c, cards: [...c.cards, card] } : c) }));
   }
@@ -3535,18 +3602,10 @@ export default function App() {
     }) })) }));
   }
   function toggleTask(cardId) {
-    updateBoard(b => ({ ...b, cols: b.cols.map(c => {
-      const idx = c.cards.findIndex(k => k.id === cardId);
-      if (idx < 0) return c;
-      const card = c.cards[idx];
-      const updated = { ...card, done: !card.done };
-      // On check → drop the card to the bottom of its lane. On uncheck → leave
-      // it in place (usually right where the user just tapped).
-      if (updated.done) {
-        return { ...c, cards: [...c.cards.filter(k => k.id !== cardId), updated] };
-      }
-      return { ...c, cards: c.cards.map(k => k.id === cardId ? updated : k) };
-    }) }));
+    // Simple flip — no reorder here. Display-side sort in HomeTab/FocusTab
+    // arranges cards by [category, done] so done items sink to the bottom of
+    // their section, and newly-added active items appear above them.
+    updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.map(k => k.id===cardId ? { ...k, done: !k.done } : k) })) }));
   }
   function moveTask(cardId, toLaneName) {
     let moved = null;
@@ -3787,7 +3846,7 @@ export default function App() {
   ];
 
   return (
-    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:760,margin:"0 auto",position:"relative"}}>
+    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:920,margin:"0 auto",position:"relative"}}>
 
       {/* Top bar */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 18px",paddingTop:"calc(12px + env(safe-area-inset-top))",position:"sticky",top:0,zIndex:25,background:C.bg+"f2",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderBottom:`1px solid ${C.border}`}}>
@@ -3876,7 +3935,7 @@ export default function App() {
       {previewPR && <PRCelebration pr={previewPR} onClose={()=>setPreviewPR(null)}/>}
 
       {/* Bottom nav */}
-      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:760,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:920,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
         {TABS.map(t=>{
           const active = tab===t.key;
           return (
