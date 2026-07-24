@@ -524,7 +524,7 @@ function ScoreCard({ label, value, sub, color=C.text, big=false }) {
 }
 
 // ─── HOME TAB ─────────────────────────────────────────────────────────────────
-function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], goalLogs = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateDiet, onUpdateActive, onToggleGoal, onSetGoalMinutes, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
+function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], goalLogs = [], customExercises = {}, todayTasks = [], onToggleTask, onAddTask, onUpdateTask, onUpdateDiet, onUpdateActive, onToggleGoal, onSetGoalMinutes, onGoTo, onOpenEdit, onClearAll, onSignOut, userEmail, onUpdatePassword, goals = DEFAULT_GOAL_LIST, onEditGoals }) {
   const goalList = (Array.isArray(goals) ? goals : DEFAULT_GOAL_LIST).map(normalizeGoal).filter(g => g.active !== false);
   const [minsEditGoal, setMinsEditGoal] = useState(null); // goalId currently entering minutes
   const [minsInput, setMinsInput] = useState("");
@@ -659,23 +659,40 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
           <div key={row.key} style={{fontSize:9,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,marginTop:12,marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${TASK_CATEGORY_COLOR[row.category]}33`}}>
             {TASK_CATEGORY_LABEL[row.category]}
           </div>
-        ) : (
-          <div key={row.key} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
-            <button aria-label="Complete task" onClick={()=>{ if(!row.card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(row.card.id); }}
-              style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
-              <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
-                <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={row.card.done?C.accent:"transparent"} stroke={row.card.done?C.accent:C.muted} strokeWidth="2" style={{transition:row.card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
-                {row.card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
-              </svg>
-            </button>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,color:row.card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:row.card.done?"line-through":"none"}}>{row.card.text}</div>
-              {row.card.dueDate && row.card.dueDate < isoDate() && !row.card.done && (
-                <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue from {row.card.dueDate}</div>
+        ) : (() => {
+          const cat = taskCategoryOf(row.card);
+          const catColor = TASK_CATEGORY_COLOR[cat];
+          return (
+            <div key={row.key} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
+              <button aria-label="Complete task" onClick={()=>{ if(!row.card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(row.card.id); }}
+                style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
+                <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
+                  <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={row.card.done?C.accent:"transparent"} stroke={row.card.done?C.accent:C.muted} strokeWidth="2" style={{transition:row.card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
+                  {row.card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
+                </svg>
+              </button>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:row.card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:row.card.done?"line-through":"none"}}>{row.card.text}</div>
+                {row.card.dueDate && row.card.dueDate < isoDate() && !row.card.done && (
+                  <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue from {row.card.dueDate}</div>
+                )}
+              </div>
+              {/* Tappable category chip — one tap flips work↔personal for this task. */}
+              {onUpdateTask ? (
+                <button
+                  onClick={()=>onUpdateTask(row.card.id, { category: cat === "work" ? "personal" : "work" })}
+                  title={`${TASK_CATEGORY_LABEL[cat]} — tap to change`}
+                  style={{flexShrink:0,alignSelf:"flex-start",background:catColor+"1a",border:`1px solid ${catColor}66`,borderRadius:6,color:catColor,padding:"3px 8px",fontSize:9,fontFamily:MONO,cursor:"pointer",letterSpacing:"0.06em",fontWeight:700,marginTop:5,lineHeight:1.4}}>
+                  {cat === "work" ? "WORK" : "PERS"}
+                </button>
+              ) : (
+                <span style={{flexShrink:0,alignSelf:"flex-start",background:catColor+"1a",border:`1px solid ${catColor}66`,borderRadius:6,color:catColor,padding:"3px 8px",fontSize:9,fontFamily:MONO,letterSpacing:"0.06em",fontWeight:700,marginTop:5,lineHeight:1.4}}>
+                  {cat === "work" ? "WORK" : "PERS"}
+                </span>
               )}
             </div>
-          </div>
-        ))}
+          );
+        })())}
         {addingToday && (
           <div style={{marginTop:8}}>
             <input autoFocus value={newTodayText} onChange={e=>setNewTodayText(e.target.value)}
@@ -985,7 +1002,9 @@ function taskDueLabel(iso) {
 }
 
 // The visual content of a task card (shared by the sortable card + drag overlay).
-function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging }) {
+function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps, dragging }) {
+  const cat = taskCategoryOf(card);
+  const catColor = TASK_CATEGORY_COLOR[cat];
   return (
     <div style={{
       background: dragging ? "#222" : "#1a1a1a",
@@ -1014,11 +1033,25 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging }) {
           return <div style={{ fontSize: 10, color, fontFamily: MONO, marginTop: 3, letterSpacing: "0.03em" }}>📅 {taskDueLabel(card.dueDate)}</div>;
         })()}
       </div>
+      {/* Always-visible category chip — one tap to flip work↔personal. */}
+      {onChangeCategory ? (
+        <button
+          onPointerDown={e=>e.stopPropagation()}
+          onClick={e=>{ e.stopPropagation(); onChangeCategory(card.id, cat === "work" ? "personal" : "work"); }}
+          title={`${TASK_CATEGORY_LABEL[cat]} — tap to change`}
+          style={{ flexShrink: 0, alignSelf: "flex-start", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, cursor: "pointer", letterSpacing: "0.06em", fontWeight: 700, marginTop: 1, lineHeight: 1.4 }}>
+          {cat === "work" ? "WORK" : "PERS"}
+        </button>
+      ) : (
+        <span style={{ flexShrink: 0, alignSelf: "flex-start", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, letterSpacing: "0.06em", fontWeight: 700, marginTop: 1, lineHeight: 1.4 }}>
+          {cat === "work" ? "WORK" : "PERS"}
+        </span>
+      )}
     </div>
   );
 }
 
-function SortableTaskCard({ card, lane, onToggle, onOpenMenu }) {
+function SortableTaskCard({ card, lane, onToggle, onOpenMenu, onChangeCategory }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id });
   const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.4 : 1, cursor: isDragging ? "grabbing" : "grab", touchAction: "manipulation" };
   // Drag listeners on the OUTER card so users can grab anywhere (not just ⠿).
@@ -1026,7 +1059,7 @@ function SortableTaskCard({ card, lane, onToggle, onOpenMenu }) {
   // Touch: 180ms press-hold delay means scrolls & taps still work.
   return (
     <div ref={setNodeRef} {...attributes} {...listeners} style={style} onClick={()=>onOpenMenu(card.id, lane)}>
-      <TaskCardBody card={card} lane={lane} onToggle={onToggle} />
+      <TaskCardBody card={card} lane={lane} onToggle={onToggle} onChangeCategory={onChangeCategory} />
     </div>
   );
 }
@@ -1300,7 +1333,8 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     {TASK_CATEGORY_LABEL[row.category]}
                   </div>
                 ) : (
-                  <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask} onOpenMenu={(id,ln)=>setMenuCard({id,lane:ln})} />
+                  <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask} onOpenMenu={(id,ln)=>setMenuCard({id,lane:ln})}
+                    onChangeCategory={onUpdateTask ? (id, next) => onUpdateTask(id, { category: next }) : null} />
                 ))}
               </TaskLane>
             );
@@ -3902,7 +3936,7 @@ export default function App() {
 
       {/* Content */}
       <div style={{paddingBottom:80}}>
-        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
+        {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateTask={updateTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
           <IronTab  history={history} onStartWorkout={startWorkout}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
