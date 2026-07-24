@@ -2,7 +2,7 @@
 // fetches from cloud on mount, and exposes mutation methods that write through.
 // Local state updates optimistically; errors log to console (improvement target).
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase, supabaseConfigured } from "./supabase";
 
 // Surface a clear one-time alert when a Supabase write fails because the table
@@ -81,15 +81,14 @@ export function useWorkouts(userId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("workouts").select("*").eq("user_id", userId).order("date", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error("workouts load:", error);
-        setData(data || []);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("workouts").select("*").eq("user_id", userId).order("date", { ascending: false });
+    if (error) console.error("workouts load:", error);
+    setData(rows || []);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function add(w) {
     const row = { user_id: userId, name: w.name, date: w.date, elapsed: w.elapsed, exercises: w.exercises };
@@ -113,7 +112,7 @@ export function useWorkouts(userId) {
     if (error) console.error("delete workout:", error);
   }
 
-  return { data, loading, add, update, remove };
+  return { data, loading, add, update, remove, refresh };
 }
 
 // ─── DIET LOG ─────────────────────────────────────────────────────────────────
@@ -121,17 +120,16 @@ export function useDietLog(userId) {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("diet_log").select("*").eq("user_id", userId)
-      .then(({ data, error }) => {
-        if (error) console.error("diet load:", error);
-        const map = {};
-        (data || []).forEach(r => { map[r.date] = r.status; });
-        setData(map);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("diet_log").select("*").eq("user_id", userId);
+    if (error) console.error("diet load:", error);
+    const map = {};
+    (rows || []).forEach(r => { map[r.date] = r.status; });
+    setData(map);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function setForDate(date, status) {
     setData(d => {
@@ -149,7 +147,7 @@ export function useDietLog(userId) {
     }
   }
 
-  return { data, loading, setForDate };
+  return { data, loading, setForDate, refresh };
 }
 
 // ─── ACTIVITY LOG ─────────────────────────────────────────────────────────────
@@ -157,17 +155,16 @@ export function useActivityLog(userId) {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("activity_log").select("*").eq("user_id", userId)
-      .then(({ data, error }) => {
-        if (error) console.error("activity load:", error);
-        const map = {};
-        (data || []).forEach(r => { map[r.date] = r.status; });
-        setData(map);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("activity_log").select("*").eq("user_id", userId);
+    if (error) console.error("activity load:", error);
+    const map = {};
+    (rows || []).forEach(r => { map[r.date] = r.status; });
+    setData(map);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function setForDate(date, status) {
     setData(d => {
@@ -185,7 +182,7 @@ export function useActivityLog(userId) {
     }
   }
 
-  return { data, loading, setForDate };
+  return { data, loading, setForDate, refresh };
 }
 
 // ─── FOCUS SESSIONS ───────────────────────────────────────────────────────────
@@ -193,15 +190,14 @@ export function useFocusSessions(userId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("focus_sessions").select("*").eq("user_id", userId).order("date", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error("focus load:", error);
-        setData(data || []);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("focus_sessions").select("*").eq("user_id", userId).order("date", { ascending: false });
+    if (error) console.error("focus load:", error);
+    setData(rows || []);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function add(s) {
     const row = { user_id: userId, date: s.date, mins: s.mins, label: s.label || "Deep work" };
@@ -211,7 +207,7 @@ export function useFocusSessions(userId) {
     return inserted;
   }
 
-  return { data, loading, add };
+  return { data, loading, add, refresh };
 }
 
 // ─── BOARDS ───────────────────────────────────────────────────────────────────
@@ -228,42 +224,43 @@ function mapColToLane(name) {
 export function useBoards(userId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const migratedRef = useRef(false);   // Only run the 3-lane migration once per session.
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    (async () => {
-      const { data: boards, error } = await supabase.from("boards").select("*").eq("user_id", userId).order("position", { ascending: true });
-      if (error) console.error("boards load:", error);
-      let list = boards || [];
+    const { data: boards, error } = await supabase.from("boards").select("*").eq("user_id", userId).order("position", { ascending: true });
+    if (error) console.error("boards load:", error);
+    let list = boards || [];
 
-      // One-time migration to a single board with 3 fixed lanes.
-      const isSingle = list.length === 1 && Array.isArray(list[0].cols) && list[0].cols.length === 3 && list[0].cols.every((c, i) => c.name === LANES[i]);
-      if (!isSingle) {
-        const laneCards = { "Today": [], "In Progress": [], "Keep in Mind": [] };
-        for (const b of list) {
-          for (const col of (b.cols || [])) {
-            const lane = mapColToLane(col.name);
-            const doneFromColumn = (col.name || "").toLowerCase().includes("done");
-            for (const card of (col.cards || [])) {
-              laneCards[lane].push({ ...card, done: card.done ?? (lane === "Today" && doneFromColumn) });
-            }
+    const isSingle = list.length === 1 && Array.isArray(list[0].cols) && list[0].cols.length === 3 && list[0].cols.every((c, i) => c.name === LANES[i]);
+    // Only migrate on first load — subsequent refreshes just re-read the fresh boards.
+    if (!isSingle && !migratedRef.current) {
+      migratedRef.current = true;
+      const laneCards = { "Today": [], "In Progress": [], "Keep in Mind": [] };
+      for (const b of list) {
+        for (const col of (b.cols || [])) {
+          const lane = mapColToLane(col.name);
+          const doneFromColumn = (col.name || "").toLowerCase().includes("done");
+          for (const card of (col.cards || [])) {
+            laneCards[lane].push({ ...card, done: card.done ?? (lane === "Today" && doneFromColumn) });
           }
         }
-        const newBoard = {
-          user_id: userId, name: "Tasks", color: "#FF6B35", position: 0,
-          cols: LANES.map((name, i) => ({ id: "lane" + i, name, cards: laneCards[name] })),
-        };
-        try {
-          await supabase.from("boards").delete().eq("user_id", userId);
-          const { data: inserted } = await supabase.from("boards").insert(newBoard).select().single();
-          list = inserted ? [inserted] : [{ ...newBoard, id: "local" }];
-        } catch (e) { console.error("board migration:", e); list = [{ ...newBoard, id: "local" }]; }
       }
+      const newBoard = {
+        user_id: userId, name: "Tasks", color: "#FF6B35", position: 0,
+        cols: LANES.map((name, i) => ({ id: "lane" + i, name, cards: laneCards[name] })),
+      };
+      try {
+        await supabase.from("boards").delete().eq("user_id", userId);
+        const { data: inserted } = await supabase.from("boards").insert(newBoard).select().single();
+        list = inserted ? [inserted] : [{ ...newBoard, id: "local" }];
+      } catch (e) { console.error("board migration:", e); list = [{ ...newBoard, id: "local" }]; }
+    }
 
-      setData(list);
-      setLoading(false);
-    })();
+    setData(list);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   // Compatible with setBoards(bs => ...) callsites.
   const setAll = useCallback((updater) => {
@@ -299,7 +296,7 @@ export function useBoards(userId) {
     });
   }, [userId]);
 
-  return { data, loading, setAll };
+  return { data, loading, setAll, refresh };
 }
 
 // ─── CUSTOM EXERCISES ─────────────────────────────────────────────────────────
@@ -307,17 +304,16 @@ export function useCustomExercises(userId) {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("custom_exercises").select("*").eq("user_id", userId)
-      .then(({ data, error }) => {
-        if (error) console.error("custom ex load:", error);
-        const map = {};
-        (data || []).forEach(r => { map[r.id] = { name: r.name, muscle: r.muscle, cat: r.cat, custom: true }; });
-        setData(map);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("custom_exercises").select("*").eq("user_id", userId);
+    if (error) console.error("custom ex load:", error);
+    const map = {};
+    (rows || []).forEach(r => { map[r.id] = { name: r.name, muscle: r.muscle, cat: r.cat, custom: true }; });
+    setData(map);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   // IMPORTANT: returns the id SYNCHRONOUSLY (callers use it immediately as exId).
   // The DB write happens in the background. Making this async caused a crash:
@@ -331,7 +327,7 @@ export function useCustomExercises(userId) {
     return id;
   }
 
-  return { data, loading, add };
+  return { data, loading, add, refresh };
 }
 
 // ─── ROONEY MEMORIES ──────────────────────────────────────────────────────────
@@ -339,15 +335,14 @@ export function useRooneyMemories(userId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("rooney_memories").select("*").eq("user_id", userId).order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error("memories load:", error);
-        setData(data || []);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("rooney_memories").select("*").eq("user_id", userId).order("created_at", { ascending: false });
+    if (error) console.error("memories load:", error);
+    setData(rows || []);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function add(category, text) {
     const row = { user_id: userId, category, text };
@@ -363,13 +358,7 @@ export function useRooneyMemories(userId) {
     if (error) console.error("delete memory:", error);
   }
 
-  async function reload() {
-    if (!userId) return;
-    const { data: fresh } = await supabase.from("rooney_memories").select("*").eq("user_id", userId).order("created_at", { ascending: false });
-    setData(fresh || []);
-  }
-
-  return { data, loading, add, remove, reload };
+  return { data, loading, add, remove, reload: refresh, refresh };
 }
 
 // ─── ZONE 2 LOG ───────────────────────────────────────────────────────────────
@@ -377,15 +366,14 @@ export function useZone2Log(userId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("zone2_log").select("*").eq("user_id", userId).order("date", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error("zone2 load:", error);
-        setData(data || []);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("zone2_log").select("*").eq("user_id", userId).order("date", { ascending: false });
+    if (error) console.error("zone2 load:", error);
+    setData(rows || []);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function add(date, minutes, label) {
     const row = { user_id: userId, date, minutes, label: label || "Zone 2" };
@@ -401,7 +389,7 @@ export function useZone2Log(userId) {
     if (error) console.error("zone2 delete:", error);
   }
 
-  return { data, loading, add, remove };
+  return { data, loading, add, remove, refresh };
 }
 
 // ─── USER SETTINGS (goals list) ───────────────────────────────────────────────
@@ -409,21 +397,19 @@ export function useSettings(userId, defaultGoals) {
   const [goals, setGoalsState] = useState(defaultGoals);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("user_settings").select("goals").eq("user_id", userId).maybeSingle()
-      .then(({ data, error }) => {
-        if (error) console.error("settings load:", error);
-        if (data && Array.isArray(data.goals) && data.goals.length > 0) {
-          setGoalsState(data.goals);
-        } else {
-          // No settings row yet — seed with defaults
-          supabase.from("user_settings").upsert({ user_id: userId, goals: defaultGoals, updated_at: new Date().toISOString() }).then(()=>{});
-          setGoalsState(defaultGoals);
-        }
-        setLoading(false);
-      });
-  }, [userId]);
+    const { data, error } = await supabase.from("user_settings").select("goals").eq("user_id", userId).maybeSingle();
+    if (error) console.error("settings load:", error);
+    if (data && Array.isArray(data.goals) && data.goals.length > 0) {
+      setGoalsState(data.goals);
+    } else {
+      supabase.from("user_settings").upsert({ user_id: userId, goals: defaultGoals, updated_at: new Date().toISOString() }).then(()=>{});
+      setGoalsState(defaultGoals);
+    }
+    setLoading(false);
+  }, [userId, defaultGoals]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function setGoals(next) {
     setGoalsState(next);
@@ -431,7 +417,7 @@ export function useSettings(userId, defaultGoals) {
     if (error) console.error("settings save:", error);
   }
 
-  return { goals, loading, setGoals };
+  return { goals, loading, setGoals, refresh };
 }
 
 // ─── ROONEY CONVERSATION (persisted chat thread) ──────────────────────────────
@@ -439,15 +425,14 @@ export function useRooneyConversation(userId) {
   const [messages, setMessages] = useState(null); // null = still loading
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("rooney_conversation").select("messages").eq("user_id", userId).maybeSingle()
-      .then(({ data, error }) => {
-        if (error) console.error("conversation load:", error);
-        setMessages(Array.isArray(data?.messages) ? data.messages : []);
-        setLoading(false);
-      });
+    const { data, error } = await supabase.from("rooney_conversation").select("messages").eq("user_id", userId).maybeSingle();
+    if (error) console.error("conversation load:", error);
+    setMessages(Array.isArray(data?.messages) ? data.messages : []);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function save(msgs) {
     const trimmed = msgs.slice(-120); // cap stored history
@@ -461,7 +446,7 @@ export function useRooneyConversation(userId) {
     if (error) console.error("conversation clear:", error);
   }
 
-  return { messages, loading, save, clear };
+  return { messages, loading, save, clear, refresh };
 }
 
 // ─── GOAL LOGS (habit + timed user-defined goals) ─────────────────────────────
@@ -469,15 +454,14 @@ export function useGoalLogs(userId) {
   const [data, setData] = useState([]); // [{goal_id, date, completed, value}]
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("goal_logs").select("*").eq("user_id", userId)
-      .then(({ data, error }) => {
-        if (error) console.error("goal_logs load:", error);
-        setData(data || []);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("goal_logs").select("*").eq("user_id", userId);
+    if (error) console.error("goal_logs load:", error);
+    setData(rows || []);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   // Toggle a binary habit completion for a date
   async function toggle(goalId, date) {
@@ -510,7 +494,7 @@ export function useGoalLogs(userId) {
     if (error) { console.error("goal_log value:", error); setData(prev); warnIfSchemaMissing(error, "timed goal minutes"); }
   }
 
-  return { data, loading, toggle, setValue };
+  return { data, loading, toggle, setValue, refresh };
 }
 
 // ─── GOAL SNAPSHOTS (timestamped audit trail so past heatmap cells stay honest)
@@ -518,15 +502,14 @@ export function useGoalSnapshots(userId) {
   const [snapshots, setSnapshots] = useState([]); // [{ user_id, snapshot_at, goals }, ...] ascending
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("goal_snapshots").select("*").eq("user_id", userId).order("snapshot_at", { ascending: true })
-      .then(({ data, error }) => {
-        if (error) { console.error("goal_snapshots load:", error); warnIfSchemaMissing(error, "goal history"); }
-        setSnapshots(data || []);
-        setLoading(false);
-      });
+    const { data, error } = await supabase.from("goal_snapshots").select("*").eq("user_id", userId).order("snapshot_at", { ascending: true });
+    if (error) { console.error("goal_snapshots load:", error); warnIfSchemaMissing(error, "goal history"); }
+    setSnapshots(data || []);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function saveSnapshot(goals) {
     const snapshot_at = new Date().toISOString();
@@ -536,7 +519,7 @@ export function useGoalSnapshots(userId) {
     if (error) { console.error("goal_snapshots insert:", error); warnIfSchemaMissing(error, "goal history"); }
   }
 
-  return { snapshots, loading, saveSnapshot };
+  return { snapshots, loading, saveSnapshot, refresh };
 }
 
 // ─── BODY WEIGHT (one measurement per day, in lbs) ────────────────────────────
@@ -544,17 +527,16 @@ export function useBodyweight(userId) {
   const [data, setData] = useState({}); // { "YYYY-MM-DD": number }
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    supabase.from("bodyweight_log").select("*").eq("user_id", userId)
-      .then(({ data, error }) => {
-        if (error) console.error("bodyweight load:", error);
-        const map = {};
-        (data || []).forEach(r => { map[r.date] = Number(r.weight); });
-        setData(map);
-        setLoading(false);
-      });
+    const { data: rows, error } = await supabase.from("bodyweight_log").select("*").eq("user_id", userId);
+    if (error) console.error("bodyweight load:", error);
+    const map = {};
+    (rows || []).forEach(r => { map[r.date] = Number(r.weight); });
+    setData(map);
+    setLoading(false);
   }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   // Pass an empty/zero/invalid weight to clear that day's entry.
   async function setForDate(date, weight) {
@@ -574,7 +556,7 @@ export function useBodyweight(userId) {
     if (error) { console.error("bodyweight upsert:", error); setData(prev); warnIfSchemaMissing(error, "body weight"); }
   }
 
-  return { data, loading, setForDate };
+  return { data, loading, setForDate, refresh };
 }
 
 // ─── ONE-TIME MIGRATION: localStorage → Supabase ──────────────────────────────

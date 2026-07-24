@@ -3489,6 +3489,42 @@ export default function App() {
   const goalSnapsState = useGoalSnapshots(userId);
   const bwState       = useBodyweight(userId);
 
+  // ── Multi-device sync ─────────────────────────────────────────────────────
+  // Refetch every table when the user comes back to this device (window focus
+  // or tab visibility change), plus a light 60-second heartbeat while active.
+  // Uses a single ref so the sync effect below isn't rebound on every render.
+  const refreshAllRef = useRef(() => {});
+  refreshAllRef.current = () => {
+    if (!userId) return;
+    workoutsState.refresh?.();
+    dietState.refresh?.();
+    activityState.refresh?.();
+    focusState.refresh?.();
+    boardsState.refresh?.();
+    customExState.refresh?.();
+    memoriesState.refresh?.();
+    zone2State.refresh?.();
+    settingsState.refresh?.();
+    convoState.refresh?.();
+    goalLogsState.refresh?.();
+    goalSnapsState.refresh?.();
+    bwState.refresh?.();
+  };
+  useEffect(() => {
+    if (!userId) return;
+    function onVisible() { if (document.visibilityState === "visible") refreshAllRef.current(); }
+    function onFocus() { refreshAllRef.current(); }
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    // Heartbeat while the app is visible — 60s. Cheap RLS-scoped selects.
+    const interval = setInterval(() => { if (document.visibilityState === "visible") refreshAllRef.current(); }, 60000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+      clearInterval(interval);
+    };
+  }, [userId]);
+
   // UI state
   const [tab, setTab] = useState("home");
   const [screen, setScreen] = useState("home");
