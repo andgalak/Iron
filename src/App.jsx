@@ -1092,7 +1092,7 @@ function TaskLane({ lane, color, itemIds, count, children, footer }) {
 }
 
 // ─── FOCUS TAB ────────────────────────────────────────────────────────────────
-function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask, onMoveTask, onRemoveTask, onReorder }) {
+function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask, onMoveTask, onRemoveTask, onReorder, onUpdateTask }) {
   const today = isoDate();
   const [timerMins, setTimerMins] = useState(90);
   const [timerInput, setTimerInput] = useState("90");
