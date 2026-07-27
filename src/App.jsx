@@ -958,7 +958,8 @@ const TASK_CATEGORIES = ["work", "personal"];
 const TASK_CATEGORY_LABEL = { work: "WORK", personal: "PERSONAL" };
 const TASK_CATEGORY_COLOR = { work: C.accent, personal: C.blue };
 function taskCategoryOf(card) {
-  return card?.category === "work" ? "work" : "personal";
+  // Default any un-categorized card to WORK (higher-priority bucket by design).
+  return card?.category === "personal" ? "personal" : "work";
 }
 // Display order: work section first, then personal. Within each category,
 // active cards on top, done cards sink to the bottom. Stable — preserves manual
@@ -1353,7 +1354,10 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
         return (
           <div onClick={()=>setMenuCard(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:160,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
             <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:480,background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"18px 18px 0 0",padding:"16px 16px calc(20px + env(safe-area-inset-bottom))"}}>
-              <div style={{fontSize:13,color:C.text,fontFamily:MONO,lineHeight:1.5,marginBottom:6}}>{card.text}</div>
+              {/* Editable card text — commit on blur or Enter (Shift+Enter for newline) */}
+              <textarea defaultValue={card.text} rows={2} onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); e.target.blur(); } }}
+                onBlur={e=>{ const next = e.target.value.trim(); if(onUpdateTask && next && next !== card.text) onUpdateTask(menuCard.id, { text: next }); }}
+                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:13,fontFamily:MONO,lineHeight:1.5,padding:"10px 12px",outline:"none",resize:"vertical",boxSizing:"border-box",marginBottom:8}}/>
               {card.dueDate && (
                 <div style={{fontSize:11,color:card.dueDate<isoDate()?C.red:card.dueDate===isoDate()?C.accent:C.muted,fontFamily:MONO,marginBottom:8}}>📅 {taskDueLabel(card.dueDate)} <span style={{color:C.dim}}>· {card.dueDate}</span></div>
               )}
@@ -3548,13 +3552,18 @@ export default function App() {
     if (!userId) return;
     function onVisible() { if (document.visibilityState === "visible") refreshAllRef.current(); }
     function onFocus() { refreshAllRef.current(); }
+    // pageshow catches Safari/Chrome back-forward cache restores — that path
+    // skips normal load hooks and would otherwise show stale cross-device data.
+    function onPageShow(e) { if (e.persisted) refreshAllRef.current(); }
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onFocus);
-    // Heartbeat while the app is visible — 60s. Cheap RLS-scoped selects.
-    const interval = setInterval(() => { if (document.visibilityState === "visible") refreshAllRef.current(); }, 60000);
+    window.addEventListener("pageshow", onPageShow);
+    // Faster heartbeat (30s) — cheap RLS-scoped selects, adds up to ~2/min.
+    const interval = setInterval(() => { if (document.visibilityState === "visible") refreshAllRef.current(); }, 30000);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onPageShow);
       clearInterval(interval);
     };
   }, [userId]);
@@ -3625,6 +3634,24 @@ export default function App() {
       setShowPerfectDay(true);
     }
   }, [dietState.data, activityState.data, workoutsState.data]);
+
+  // At the start of each new calendar day, drop all completed tasks from the
+  // board so the checklist doesn't pile up strike-throughs forever.
+  useEffect(() => {
+    if (!userId) return;
+    const t = isoDate();
+    const KEY = "iron_last_task_cleanup";
+    let last = null;
+    try { last = localStorage.getItem(KEY); } catch {}
+    if (last === t) return;
+    if (!boardsState.data || boardsState.data.length === 0) return;
+    // Only sweep if there's actually something to sweep — avoids a no-op write.
+    const hasDone = boardsState.data.some(b => (b.cols || []).some(c => (c.cards || []).some(k => k.done)));
+    if (!hasDone) { try { localStorage.setItem(KEY, t); } catch {} return; }
+    boardsState.setAll(bs => bs.map(b => ({ ...b, cols: (b.cols || []).map(c => ({ ...c, cards: (c.cards || []).filter(k => !k.done) })) })));
+    try { localStorage.setItem(KEY, t); } catch {}
+  }, [userId, boardsState.data]);
+
   // Manual trigger for the Settings preview button (also clears today's dedup
   // flag so a real Perfect Day landing later still fires).
   function previewPerfectDay() {
@@ -3652,10 +3679,12 @@ export default function App() {
   // Tasks in the Today lane with a future due date are scheduled — hidden
   // from the Home "TODAY" checklist until that date arrives.
   const todayISO = isoDate();
+  // Home hides completed tasks entirely (they still show on Focus). Also drops
+  // future-scheduled cards until their day arrives.
   const todayTasks = (board?.cols?.find(c => c.name === "Today")?.cards || [])
-    .filter(k => !k.dueDate || k.dueDate <= todayISO);
+    .filter(k => !k.done && (!k.dueDate || k.dueDate <= todayISO));
   function updateBoard(mutator) { setBoards(bs => bs.map((b,i) => i===0 ? mutator(b) : b)); }
-  function addTask(laneName, text, dueDate = null, category = "personal") {
+  function addTask(laneName, text, dueDate = null, category = "work") {
     if (!text.trim() || !board) return;
     const card = { id: uid(), text: text.trim(), tags: [], done: false, category };
     if (dueDate) card.dueDate = dueDate;
@@ -4010,7 +4039,7 @@ export default function App() {
           const active = tab===t.key;
           return (
             <button key={t.key} style={{flex:1,background:active?C.accent+"12":"none",border:"none",borderTop:`2px solid ${active?C.accent:"transparent"}`,padding:"9px 0 11px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}
-              onClick={()=>setTab(t.key)}>
+              onClick={()=>{ setTab(t.key); refreshAllRef.current?.(); }}>
               <span style={{fontSize:16,color:active?C.accent:"#6b6b6b",opacity:active?1:0.9}}>{t.icon}</span>
               <span style={{fontSize:9,color:active?C.accent:"#6b6b6b",fontFamily:MONO,letterSpacing:"0.08em",fontWeight:active?700:400}}>{t.label}</span>
             </button>
