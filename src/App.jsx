@@ -1016,7 +1016,8 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
     }}>
       {/* Grip icon — the whole card is draggable now, so this is just a visual affordance. */}
       <span aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 15, cursor: "grab", lineHeight: 1, marginTop: 0, pointerEvents: "none" }}>⠿</span>
-      {lane === "Today" && (
+      {/* Checkbox — Today lane only, and never on recurring templates (they aren't "done-able") */}
+      {lane === "Today" && !card.recurrence && (
         <button aria-label="Complete task" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggle && onToggle(card.id); }}
           style={{ flexShrink: 0, width: 22, height: 22, padding: 0, background: "transparent", border: "none", cursor: "pointer", marginTop: 1 }}>
           <svg width="20" height="20" viewBox="0 0 24 24" style={{ display: "block" }}>
@@ -1033,6 +1034,11 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
           const color = isOverdue ? C.red : isToday ? C.accent : C.muted;
           return <div style={{ fontSize: 10, color, fontFamily: MONO, marginTop: 3, letterSpacing: "0.03em" }}>📅 {taskDueLabel(card.dueDate)}</div>;
         })()}
+        {card.recurrence?.kind === "weekly" && (
+          <div style={{ fontSize: 10, color: C.blue, fontFamily: MONO, marginTop: 3, letterSpacing: "0.03em" }}>
+            🔁 every {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][card.recurrence.weekday]}
+          </div>
+        )}
       </div>
       {/* Always-visible category chip — one tap to flip work↔personal. */}
       {onChangeCategory ? (
@@ -1073,7 +1079,7 @@ function TaskLane({ lane, color, itemIds, count, children, footer }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane });
   const isEmpty = (itemIds?.length || 0) === 0;
   return (
-    <div ref={setNodeRef} style={{ flexShrink: 0, width: 280, minHeight: 340, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 14, transition: "border-color 0.15s", display: "flex", flexDirection: "column" }}>
+    <div ref={setNodeRef} style={{ flex: "1 1 280px", minWidth: 240, minHeight: 340, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 14, transition: "border-color 0.15s", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color, fontFamily: MONO, letterSpacing: "0.06em" }}>{lane.toUpperCase()}</div>
         <span style={{ fontSize: 11, color: C.dim, fontFamily: MONO }}>{count}</span>
@@ -1388,6 +1394,27 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"10px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Clear</button>
                 )}
               </div>
+
+              {/* Recurring — turns this card into a weekly template that spawns
+                  a fresh instance into Today whenever the chosen weekday hits. */}
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>REPEATS</div>
+              <select value={card.recurrence?.weekday ?? ""}
+                onChange={e=>{
+                  if (!onUpdateTask) return;
+                  const v = e.target.value;
+                  if (v === "") onUpdateTask(menuCard.id, { recurrence: null });
+                  else onUpdateTask(menuCard.id, { recurrence: { kind: "weekly", weekday: parseInt(v) } });
+                }}
+                style={{width:"100%",background:"#161616",border:`1px solid ${card.recurrence?C.blue:C.border2}`,borderRadius:8,color:card.recurrence?C.blue:C.text,padding:"10px 12px",fontSize:13,fontFamily:MONO,outline:"none",colorScheme:"dark",marginBottom:14}}>
+                <option value="">Doesn't repeat</option>
+                <option value="1">Every Monday</option>
+                <option value="2">Every Tuesday</option>
+                <option value="3">Every Wednesday</option>
+                <option value="4">Every Thursday</option>
+                <option value="5">Every Friday</option>
+                <option value="6">Every Saturday</option>
+                <option value="0">Every Sunday</option>
+              </select>
 
               <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>MOVE TO</div>
               {LANES.map(lane=>(
@@ -3635,21 +3662,59 @@ export default function App() {
     }
   }, [dietState.data, activityState.data, workoutsState.data]);
 
-  // At the start of each new calendar day, drop all completed tasks from the
-  // board so the checklist doesn't pile up strike-throughs forever.
+  // Daily maintenance: (1) spawn a fresh instance for any recurring template
+  // whose weekday matches today (per-template dedup via `lastSpawned`), and
+  // (2) sweep completed non-template cards so the board doesn't pile up.
   useEffect(() => {
     if (!userId) return;
+    if (!boardsState.data || boardsState.data.length === 0) return;
     const t = isoDate();
+    const board = boardsState.data[0];
+    if (!board) return;
+
+    const todayWeekday = new Date(t + "T12:00:00").getDay();  // 0=Sun ... 6=Sat
+    const templatesToSpawn = [];
+    for (const col of (board.cols || [])) {
+      for (const k of (col.cards || [])) {
+        if (k.recurrence?.kind === "weekly" && k.recurrence.weekday === todayWeekday && k.lastSpawned !== t) {
+          templatesToSpawn.push(k);
+        }
+      }
+    }
+
     const KEY = "iron_last_task_cleanup";
     let last = null;
     try { last = localStorage.getItem(KEY); } catch {}
-    if (last === t) return;
-    if (!boardsState.data || boardsState.data.length === 0) return;
-    // Only sweep if there's actually something to sweep — avoids a no-op write.
-    const hasDone = boardsState.data.some(b => (b.cols || []).some(c => (c.cards || []).some(k => k.done)));
-    if (!hasDone) { try { localStorage.setItem(KEY, t); } catch {} return; }
-    boardsState.setAll(bs => bs.map(b => ({ ...b, cols: (b.cols || []).map(c => ({ ...c, cards: (c.cards || []).filter(k => !k.done) })) })));
-    try { localStorage.setItem(KEY, t); } catch {}
+    const shouldSweep = last !== t;
+    const hasDone = (board.cols || []).some(c => (c.cards || []).some(k => k.done && !k.recurrence));
+    const doSweep = shouldSweep && hasDone;
+
+    if (templatesToSpawn.length === 0 && !doSweep) {
+      if (shouldSweep) { try { localStorage.setItem(KEY, t); } catch {} }
+      return;
+    }
+
+    const spawnedIds = new Set(templatesToSpawn.map(x => x.id));
+    const newInstances = templatesToSpawn.map(tpl => ({
+      id: uid(), text: tpl.text, tags: tpl.tags || [], done: false,
+      category: tpl.category || "work", sourceId: tpl.id,
+    }));
+
+    boardsState.setAll(bs => bs.map((b, i) => {
+      if (i !== 0) return b;
+      return {
+        ...b,
+        cols: (b.cols || []).map(c => {
+          let cards = c.cards.map(k => spawnedIds.has(k.id) ? { ...k, lastSpawned: t } : k);
+          // Sweep: drop done cards, but preserve templates even if accidentally checked
+          if (doSweep) cards = cards.filter(k => !k.done || k.recurrence);
+          // Drop spawned instances into Today lane
+          if (c.name === "Today" && newInstances.length > 0) cards = [...cards, ...newInstances];
+          return { ...c, cards };
+        }),
+      };
+    }));
+    if (shouldSweep) { try { localStorage.setItem(KEY, t); } catch {} }
   }, [userId, boardsState.data]);
 
   // Manual trigger for the Settings preview button (also clears today's dedup
@@ -3680,9 +3745,10 @@ export default function App() {
   // from the Home "TODAY" checklist until that date arrives.
   const todayISO = isoDate();
   // Home hides completed tasks entirely (they still show on Focus). Also drops
-  // future-scheduled cards until their day arrives.
+  // future-scheduled cards until their day arrives, and recurring TEMPLATES
+  // (their spawned instances show instead).
   const todayTasks = (board?.cols?.find(c => c.name === "Today")?.cards || [])
-    .filter(k => !k.done && (!k.dueDate || k.dueDate <= todayISO));
+    .filter(k => !k.done && !k.recurrence && (!k.dueDate || k.dueDate <= todayISO));
   function updateBoard(mutator) { setBoards(bs => bs.map((b,i) => i===0 ? mutator(b) : b)); }
   function addTask(laneName, text, dueDate = null, category = "work") {
     if (!text.trim() || !board) return;
@@ -3690,13 +3756,14 @@ export default function App() {
     if (dueDate) card.dueDate = dueDate;
     updateBoard(b => ({ ...b, cols: b.cols.map(c => c.name===laneName ? { ...c, cards: [...c.cards, card] } : c) }));
   }
-  // Generic per-card edit — used to set/clear dueDate from the action menu.
-  // Passing { dueDate: null } clears the field cleanly.
+  // Generic per-card edit — used to set/clear dueDate + recurrence from the
+  // action menu. Passing { field: null } cleanly removes the field.
   function updateTask(cardId, patch) {
     updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.map(k => {
       if (k.id !== cardId) return k;
       const next = { ...k, ...patch };
       if (patch.dueDate === null || patch.dueDate === "") delete next.dueDate;
+      if (patch.recurrence === null) { delete next.recurrence; delete next.lastSpawned; }
       return next;
     }) })) }));
   }
@@ -3945,7 +4012,7 @@ export default function App() {
   ];
 
   return (
-    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:920,margin:"0 auto",position:"relative"}}>
+    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:1100,margin:"0 auto",position:"relative"}}>
 
       {/* Top bar */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 18px",paddingTop:"calc(12px + env(safe-area-inset-top))",position:"sticky",top:0,zIndex:25,background:C.bg+"f2",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderBottom:`1px solid ${C.border}`}}>
@@ -4034,7 +4101,7 @@ export default function App() {
       {previewPR && <PRCelebration pr={previewPR} onClose={()=>setPreviewPR(null)}/>}
 
       {/* Bottom nav */}
-      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:920,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:1100,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
         {TABS.map(t=>{
           const active = tab===t.key;
           return (
