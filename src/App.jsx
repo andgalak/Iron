@@ -1736,11 +1736,20 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                 </>
               )}
 
-              <div style={{display:"flex",gap:8,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
-                {!card.recurrence && (
-                  <button onClick={()=>{onToggleTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>{card.done?"Mark not done":"Complete"}</button>
-                )}
-                <button onClick={()=>{onRemoveTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>Delete</button>
+              {/* Footer: destructive on the left, commit-and-close on the right.
+                  Edits already save as you make them (fields commit on blur) —
+                  this button also flushes a half-typed subtask before closing. */}
+              <div style={{display:"flex",gap:8,paddingTop:12,borderTop:`1px solid ${C.border}`,alignItems:"center"}}>
+                <button onClick={()=>{onRemoveTask(menuCard.id);setMenuCard(null);}}
+                  style={{background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"11px 16px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>Delete</button>
+                <div style={{flex:1}}/>
+                <button
+                  onClick={()=>{
+                    const pending = newSubtask.trim();
+                    if (pending) { setSubtasks([...subtasks, { id: uid(), text: pending, done: false }]); setNewSubtask(""); }
+                    setMenuCard(null);
+                  }}
+                  style={{background:C.accent,border:"none",borderRadius:8,color:"#000",padding:"11px 22px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.04em"}}>Save &amp; close</button>
               </div>
             </div>
           </div>
@@ -4102,7 +4111,10 @@ export default function App() {
     let last = null;
     try { last = localStorage.getItem(KEY); } catch {}
     const shouldSweep = last !== t;
-    const hasDone = (board.cols || []).some(c => (c.cards || []).some(k => k.done && !k.recurrence));
+    // The daily clear-out applies to TODAY only — that's the list that piles up.
+    // This Week / Keep in Mind keep their completed cards (they just sink to the
+    // bottom) so ticking something there never makes it disappear overnight.
+    const hasDone = (board.cols || []).some(c => c.name === "Today" && (c.cards || []).some(k => k.done && !k.recurrence));
     const doSweep = shouldSweep && hasDone;
 
     // Templates belong in Keep in Mind. Relocate any that are sitting in
@@ -4140,8 +4152,8 @@ export default function App() {
         ...b,
         cols: cols.map(c => {
           let cards = c.cards.map(k => spawnedIds.has(k.id) ? { ...k, lastSpawned: t } : k);
-          // Sweep: drop done cards, but preserve templates even if accidentally checked
-          if (doSweep) cards = cards.filter(k => !k.done || k.recurrence);
+          // Sweep Today only; preserve templates even if accidentally checked
+          if (doSweep && c.name === "Today") cards = cards.filter(k => !k.done || k.recurrence);
           // Drop spawned instances into Today lane
           if (c.name === "Today" && newInstances.length > 0) cards = [...cards, ...newInstances];
           // Land relocated templates in Keep in Mind
@@ -4226,11 +4238,28 @@ export default function App() {
     updateBoard(b => ({ ...b, cols: b.cols.map(c => ({ ...c, cards: c.cards.filter(k=>k.id!==cardId) })) }));
   }
   // Apply a new lane→[cardId] ordering (from drag-and-drop) to the board.
+  // Apply a new lane→[cardId] ordering from drag-and-drop.
+  // This must be NON-DESTRUCTIVE: it previously rebuilt each column purely from
+  // the supplied id list, so any card the caller didn't know about was silently
+  // deleted. That happened whenever the board gained a card the drag layer
+  // hadn't seen yet (a cross-device sync, a recurring spawn, a card added
+  // mid-drag) and — worse — wiped an entire column whose name wasn't in the
+  // list at all, e.g. during the "In Progress" → "This Week" rename.
   function reorderTasks(laneToIds) {
     updateBoard(b => {
       const byId = {};
       b.cols.forEach(c => c.cards.forEach(k => { byId[k.id] = k; }));
-      return { ...b, cols: b.cols.map(c => ({ ...c, cards: (laneToIds[c.name] || []).map(id => byId[id]).filter(Boolean) })) };
+      const placed = new Set(Object.values(laneToIds).flat());
+      return {
+        ...b,
+        cols: b.cols.map(c => {
+          const ids = laneToIds[c.name];
+          if (!ids) return c;                       // column not described — leave it alone
+          const ordered = ids.map(id => byId[id]).filter(Boolean);
+          const orphans = c.cards.filter(k => !placed.has(k.id));  // never drop unseen cards
+          return { ...c, cards: [...ordered, ...orphans] };
+        }),
+      };
     });
   }
 
