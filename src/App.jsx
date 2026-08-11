@@ -1075,7 +1075,21 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
   if (card.recurrence?.kind === "weekly") {
     meta.push({ key: "rec", text: `🔁 ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][card.recurrence.weekday]}`, color: C.blue });
   }
-  if (subTotal > 0) meta.push({ key: "sub", text: `☑ ${subDone}/${subTotal}`, color: subDone === subTotal ? C.green : C.muted });
+  if (subTotal > 0) {
+    // Flag the soonest date among unfinished subtasks so a slipping step is
+    // visible on the board, not buried in the detail view.
+    const pending = (card.subtasks || []).filter(s => !s.done && s.due).map(s => s.due).sort();
+    const soonest = pending[0];
+    const subColor = subDone === subTotal ? C.green
+      : (soonest && soonest < isoDate()) ? C.red
+      : (soonest && soonest === isoDate()) ? C.accent
+      : C.muted;
+    meta.push({
+      key: "sub",
+      text: `☑ ${subDone}/${subTotal}${soonest ? ` · ${taskDueLabel(soonest)}` : ""}`,
+      color: subColor,
+    });
+  }
   if (card.notes) meta.push({ key: "note", text: "📝", color: C.muted });
   if (card.blocked) meta.push({ key: "blk", text: "⏸ waiting", color: C.yellow });
 
@@ -1634,7 +1648,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     SUBTASKS {subtasks.length>0 && <span style={{color:C.muted}}>· {subtasks.filter(s=>s.done).length}/{subtasks.length}</span>}
                   </div>
                   {subtasks.map((st, i) => (
-                    <div key={st.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                    <div key={st.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5,flexWrap:"nowrap"}}>
                       <button aria-label="Toggle subtask" onClick={()=>setSubtasks(subtasks.map(x=>x.id===st.id?{...x,done:!x.done}:x))}
                         style={{flexShrink:0,width:18,height:18,padding:0,background:"transparent",border:"none",cursor:"pointer"}}>
                         <svg width="16" height="16" viewBox="0 0 24 24" style={{display:"block"}}>
@@ -1645,7 +1659,17 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                       <input defaultValue={st.text}
                         onBlur={e=>{ const v=e.target.value.trim(); if(!v) setSubtasks(subtasks.filter(x=>x.id!==st.id)); else if(v!==st.text) setSubtasks(subtasks.map(x=>x.id===st.id?{...x,text:v}:x)); }}
                         onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }}
-                        style={{flex:1,minWidth:0,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,color:st.done?C.muted:C.text,fontSize:12,fontFamily:MONO,padding:"4px 2px",outline:"none",textDecoration:st.done?"line-through":"none"}}/>
+                        style={{flex:1,minWidth:60,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,color:st.done?C.muted:C.text,fontSize:12,fontFamily:MONO,padding:"4px 2px",outline:"none",textDecoration:st.done?"line-through":"none"}}/>
+                      {/* Per-subtask due date — subtle when empty, colored when set/overdue */}
+                      {(() => {
+                        const overdue = st.due && !st.done && st.due < isoDate();
+                        const col = overdue ? C.red : st.due ? C.accent : C.dim;
+                        return (
+                          <input type="date" value={st.due || ""} title={st.due ? `Due ${st.due}` : "Set a due date"}
+                            onChange={e=>setSubtasks(subtasks.map(x=>x.id===st.id?(e.target.value?{...x,due:e.target.value}:(()=>{const{due,...rest}=x;return rest;})()):x))}
+                            style={{flexShrink:0,width:st.due?112:30,background:"transparent",border:`1px solid ${st.due?col+"55":C.border}`,borderRadius:6,color:col,fontSize:10,fontFamily:MONO,padding:"3px 4px",outline:"none",colorScheme:"dark",cursor:"pointer",opacity:st.due?1:0.5}}/>
+                        );
+                      })()}
                       <button aria-label="Remove subtask" onClick={()=>setSubtasks(subtasks.filter(x=>x.id!==st.id))}
                         style={{flexShrink:0,background:"transparent",border:"none",color:"#666",fontSize:12,cursor:"pointer",padding:"2px 4px"}}>✕</button>
                     </div>
