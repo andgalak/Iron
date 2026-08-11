@@ -1020,21 +1020,37 @@ function taskCategoryOf(card) {
 // Display order: work section first, then personal. Within each category,
 // active cards on top, done cards sink to the bottom. Stable — preserves manual
 // order (from drag) within each [category, done] group.
+function isTaskTemplate(card) { return card?.recurrence?.kind === "weekly"; }
+
 function sortTasksForDisplay(cards) {
   return [...cards].sort((a, b) => {
+    // Recurring templates always sink below real tasks — they're standing
+    // commitments, not work to do right now.
+    const ta = isTaskTemplate(a) ? 1 : 0;
+    const tb = isTaskTemplate(b) ? 1 : 0;
+    if (ta !== tb) return ta - tb;
     const ca = taskCategoryOf(a) === "work" ? 0 : 1;
     const cb = taskCategoryOf(b) === "work" ? 0 : 1;
     if (ca !== cb) return ca - cb;
     return (a.done ? 1 : 0) - (b.done ? 1 : 0);
   });
 }
-// Walk a sorted card list and emit an inline "section header" whenever the
-// category changes, so lane rendering can show WORK / PERSONAL dividers.
+// Walk a sorted card list and emit inline "section headers": WORK / PERSONAL
+// dividers for real tasks, then a single REPEATING divider for templates.
 function groupTasksForRender(cards) {
   const sorted = sortTasksForDisplay(cards);
   const out = [];
   let lastCat = null;
+  let templateHeaderDone = false;
   for (const c of sorted) {
+    if (isTaskTemplate(c)) {
+      if (!templateHeaderDone) {
+        out.push({ kind: "header", template: true, key: "h-repeating" });
+        templateHeaderDone = true;
+      }
+      out.push({ kind: "card", card: c, key: "c-" + c.id });
+      continue;
+    }
     const cat = taskCategoryOf(c);
     if (cat !== lastCat) {
       out.push({ kind: "header", category: cat, key: "h-" + cat });
@@ -1521,9 +1537,15 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                         onClick={()=>{setAddingLane(lane);setNewCardText("");setNewCardDate("");setNewCardCat("personal");}}>+ Add task</button>
                 }>
                 {rows.map(row => row.kind === "header" ? (
-                  <div key={row.key} style={{fontSize:9,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,margin:"10px 0 4px 4px",paddingBottom:3,borderBottom:`1px solid ${TASK_CATEGORY_COLOR[row.category]}33`}}>
-                    {TASK_CATEGORY_LABEL[row.category]}
-                  </div>
+                  row.template ? (
+                    <div key={row.key} style={{fontSize:9,color:C.blue,fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,margin:"14px 0 4px 4px",paddingBottom:3,borderBottom:`1px solid ${C.blue}33`}}>
+                      🔁 REPEATING <span style={{color:C.dim,fontWeight:400,letterSpacing:"0.04em"}}>· auto-adds to Today</span>
+                    </div>
+                  ) : (
+                    <div key={row.key} style={{fontSize:9,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,margin:"10px 0 4px 4px",paddingBottom:3,borderBottom:`1px solid ${TASK_CATEGORY_COLOR[row.category]}33`}}>
+                      {TASK_CATEGORY_LABEL[row.category]}
+                    </div>
+                  )
                 ) : (
                   <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask}
                     onOpenDetail={(id,ln)=>setMenuCard({id,lane:ln})}
@@ -1609,15 +1631,21 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     )}
                   </div>
 
-                  {/* Repeats */}
+                  {/* Repeats — a recurring card becomes a template and lives in
+                      Keep in Mind; instances appear in Today on the day. */}
                   <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>REPEATS</div>
                   <select value={card.recurrence?.weekday ?? ""}
                     onChange={e=>{
                       const v = e.target.value;
-                      if (v === "") patch({ recurrence: null });
-                      else patch({ recurrence: { kind: "weekly", weekday: parseInt(v) } });
+                      if (v === "") { patch({ recurrence: null }); return; }
+                      patch({ recurrence: { kind: "weekly", weekday: parseInt(v) } });
+                      // Templates belong in Keep in Mind — they aren't work for today.
+                      if (menuCard.lane !== "Keep in Mind") {
+                        onMoveTask(menuCard.id, "Keep in Mind");
+                        setMenuCard(m => m ? { ...m, lane: "Keep in Mind" } : m);
+                      }
                     }}
-                    style={{width:"100%",background:"#161616",border:`1px solid ${card.recurrence?C.blue:C.border2}`,borderRadius:8,color:card.recurrence?C.blue:C.text,padding:"9px 11px",fontSize:12,fontFamily:MONO,outline:"none",colorScheme:"dark",marginBottom:14,boxSizing:"border-box"}}>
+                    style={{width:"100%",background:"#161616",border:`1px solid ${card.recurrence?C.blue:C.border2}`,borderRadius:8,color:card.recurrence?C.blue:C.text,padding:"9px 11px",fontSize:12,fontFamily:MONO,outline:"none",colorScheme:"dark",marginBottom:card.recurrence?7:14,boxSizing:"border-box"}}>
                     <option value="">Doesn't repeat</option>
                     <option value="1">Every Monday</option>
                     <option value="2">Every Tuesday</option>
@@ -1627,6 +1655,11 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     <option value="6">Every Saturday</option>
                     <option value="0">Every Sunday</option>
                   </select>
+                  {card.recurrence && (
+                    <div style={{fontSize:10,color:C.muted,fontFamily:MONO,lineHeight:1.55,marginBottom:14,padding:"8px 10px",background:C.blue+"0f",border:`1px solid ${C.blue}33`,borderRadius:7}}>
+                      This is a template, kept in <span style={{color:C.blue}}>Keep in Mind</span>. Every {["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][card.recurrence.weekday]} a fresh copy drops into Today. Tick off the copy, not this.
+                    </div>
+                  )}
 
                   {/* Waiting / blocked */}
                   <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>STATUS</div>
@@ -1686,17 +1719,21 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                 </div>
               </div>
 
-              {/* Move to */}
-              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>MOVE TO</div>
-              <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
-                {LANES.map(lane=>(
-                  <button key={lane} disabled={lane===menuCard.lane}
-                    onClick={()=>{onMoveTask(menuCard.id,lane);setMenuCard(m=>m?{...m,lane}:m);}}
-                    style={{flex:"1 1 120px",background:lane===menuCard.lane?laneColor[lane]+"1a":"transparent",border:`1px solid ${lane===menuCard.lane?laneColor[lane]:C.border}`,borderRadius:8,color:lane===menuCard.lane?laneColor[lane]:C.text,padding:"10px 8px",fontSize:11.5,fontFamily:MONO,cursor:lane===menuCard.lane?"default":"pointer",fontWeight:lane===menuCard.lane?700:400}}>
-                    {lane}
-                  </button>
-                ))}
-              </div>
+              {/* Move to — not offered for templates, which stay in Keep in Mind */}
+              {!card.recurrence && (
+                <>
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>MOVE TO</div>
+                  <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+                    {LANES.map(lane=>(
+                      <button key={lane} disabled={lane===menuCard.lane}
+                        onClick={()=>{onMoveTask(menuCard.id,lane);setMenuCard(m=>m?{...m,lane}:m);}}
+                        style={{flex:"1 1 120px",background:lane===menuCard.lane?laneColor[lane]+"1a":"transparent",border:`1px solid ${lane===menuCard.lane?laneColor[lane]:C.border}`,borderRadius:8,color:lane===menuCard.lane?laneColor[lane]:C.text,padding:"10px 8px",fontSize:11.5,fontFamily:MONO,cursor:lane===menuCard.lane?"default":"pointer",fontWeight:lane===menuCard.lane?700:400}}>
+                        {lane}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
               <div style={{display:"flex",gap:8,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
                 {menuCard.lane==="Today" && !card.recurrence && (
@@ -4067,7 +4104,16 @@ export default function App() {
     const hasDone = (board.cols || []).some(c => (c.cards || []).some(k => k.done && !k.recurrence));
     const doSweep = shouldSweep && hasDone;
 
-    if (templatesToSpawn.length === 0 && !doSweep) {
+    // Templates belong in Keep in Mind. Relocate any that are sitting in
+    // Today / This Week (from before that rule existed, or a stray drag).
+    const strayTemplates = [];
+    for (const col of (board.cols || [])) {
+      if (col.name === "Keep in Mind") continue;
+      for (const k of (col.cards || [])) if (k.recurrence?.kind === "weekly") strayTemplates.push(k.id);
+    }
+    const strayIds = new Set(strayTemplates);
+
+    if (templatesToSpawn.length === 0 && !doSweep && strayIds.size === 0) {
       if (shouldSweep) { try { localStorage.setItem(KEY, t); } catch {} }
       return;
     }
@@ -4080,14 +4126,27 @@ export default function App() {
 
     boardsState.setAll(bs => bs.map((b, i) => {
       if (i !== 0) return b;
+      // Pull stray templates out of their current lanes first.
+      const relocated = [];
+      let cols = (b.cols || []).map(c => {
+        if (c.name === "Keep in Mind") return c;
+        const keep = [], move = [];
+        for (const k of (c.cards || [])) (strayIds.has(k.id) ? move : keep).push(k);
+        relocated.push(...move);
+        return { ...c, cards: keep };
+      });
       return {
         ...b,
-        cols: (b.cols || []).map(c => {
+        cols: cols.map(c => {
           let cards = c.cards.map(k => spawnedIds.has(k.id) ? { ...k, lastSpawned: t } : k);
           // Sweep: drop done cards, but preserve templates even if accidentally checked
           if (doSweep) cards = cards.filter(k => !k.done || k.recurrence);
           // Drop spawned instances into Today lane
           if (c.name === "Today" && newInstances.length > 0) cards = [...cards, ...newInstances];
+          // Land relocated templates in Keep in Mind
+          if (c.name === "Keep in Mind" && relocated.length > 0) {
+            cards = [...cards, ...relocated.map(k => spawnedIds.has(k.id) ? { ...k, lastSpawned: t } : k)];
+          }
           return { ...c, cards };
         }),
       };
