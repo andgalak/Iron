@@ -1224,7 +1224,7 @@ function TaskLane({ lane, color, itemIds, count, children, footer, focused, onTo
 }
 
 // ─── FOCUS TAB ────────────────────────────────────────────────────────────────
-function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask, onMoveTask, onRemoveTask, onReorder, onUpdateTask }) {
+function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask, onMoveTask, onRemoveTask, onReorder, onUpdateTask, onCommit }) {
   const today = isoDate();
   const [timerMins, setTimerMins] = useState(90);
   const [timerInput, setTimerInput] = useState("90");
@@ -1748,6 +1748,10 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     const pending = newSubtask.trim();
                     if (pending) { setSubtasks([...subtasks, { id: uid(), text: pending, done: false }]); setNewSubtask(""); }
                     setMenuCard(null);
+                    // Push everything through: reconcile with the cloud so other
+                    // devices are in step, and re-run the recurring/spawn pass so
+                    // a rule set for today lands in Today right away.
+                    if (onCommit) onCommit();
                   }}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",padding:"11px 22px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.04em"}}>Save &amp; close</button>
               </div>
@@ -4263,6 +4267,14 @@ export default function App() {
     });
   }
 
+  // "Save & close" hook. Board writes are already fire-and-forget on every
+  // edit, so this is a reconcile step: give the in-flight write a moment to
+  // land, then pull fresh cloud state. Pulling immediately would race the write
+  // and could stomp the edit that was just made.
+  function commitBoard() {
+    setTimeout(() => { refreshAllRef.current?.(); }, 900);
+  }
+
   function updateDiet(d,v){ dietState.setForDate(d, v); }
   function updateActive(d,v){ activityState.setForDate(d, v); }
   function addSession(s){ focusState.add(s); }
@@ -4570,7 +4582,7 @@ export default function App() {
           <IronTab  history={history} onStartWorkout={startWorkout} draft={workoutDraft} onResumeDraft={resumeDraft} onDiscardDraft={clearWorkoutDraft}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
-        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks} onUpdateTask={updateTask}/>}
+        {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks} onUpdateTask={updateTask} onCommit={commitBoard}/>}
         {tab==="trends" && <TrendsTab history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} focusSessions={focusSessions} bodyweight={bwState.data} goals={goalList} goalLogs={goalLogs} goalSnapshots={goalSnapsState.snapshots} customExercises={customExercises}/>}
       </div>
 
