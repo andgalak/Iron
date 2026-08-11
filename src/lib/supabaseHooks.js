@@ -213,10 +213,10 @@ export function useFocusSessions(userId) {
 // ─── BOARDS ───────────────────────────────────────────────────────────────────
 // Boards are mutated with the full setBoards(updater) pattern. The hook diffs
 // the previous vs next array and persists each changed board.
-const LANES = ["Today", "In Progress", "Keep in Mind"];
+const LANES = ["Today", "This Week", "Keep in Mind"];
 function mapColToLane(name) {
   const n = (name || "").toLowerCase();
-  if (n.includes("progress")) return "In Progress";
+  if (n.includes("progress") || n.includes("week")) return "This Week";
   if (n.includes("done") || n.includes("today")) return "Today";
   return "Keep in Mind"; // Backlog, Todo, etc.
 }
@@ -232,11 +232,31 @@ export function useBoards(userId) {
     if (error) console.error("boards load:", error);
     let list = boards || [];
 
+    // Gentle in-place rename: the middle lane used to be called "In Progress".
+    // Do this BEFORE the shape check so an otherwise-valid board isn't torn
+    // down and rebuilt (which would lose card ordering).
+    {
+      let renamed = false;
+      list = list.map(b => {
+        if (!Array.isArray(b.cols)) return b;
+        if (!b.cols.some(c => c.name === "In Progress")) return b;
+        renamed = true;
+        return { ...b, cols: b.cols.map(c => c.name === "In Progress" ? { ...c, name: "This Week" } : c) };
+      });
+      if (renamed) {
+        for (const b of list) {
+          if (!b.id || b.id === "local") continue;
+          const { error: renErr } = await supabase.from("boards").update({ cols: b.cols }).eq("id", b.id);
+          if (renErr) console.error("lane rename:", renErr);
+        }
+      }
+    }
+
     const isSingle = list.length === 1 && Array.isArray(list[0].cols) && list[0].cols.length === 3 && list[0].cols.every((c, i) => c.name === LANES[i]);
     // Only migrate on first load — subsequent refreshes just re-read the fresh boards.
     if (!isSingle && !migratedRef.current) {
       migratedRef.current = true;
-      const laneCards = { "Today": [], "In Progress": [], "Keep in Mind": [] };
+      const laneCards = { "Today": [], "This Week": [], "Keep in Mind": [] };
       for (const b of list) {
         for (const col of (b.cols || [])) {
           const lane = mapColToLane(col.name);

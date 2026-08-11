@@ -973,8 +973,41 @@ function CoffeeMug({ fillPct, running, timeText }) {
 }
 
 // ─── Kanban drag-and-drop pieces (Trello-style, touch-friendly via @dnd-kit) ──
-const TASK_LANES = ["Today", "In Progress", "Keep in Mind"];
-const TASK_LANE_COLOR = { "Today": C.accent, "In Progress": C.blue, "Keep in Mind": C.muted };
+const TASK_LANES = ["Today", "This Week", "Keep in Mind"];
+const TASK_LANE_COLOR = { "Today": C.accent, "This Week": C.blue, "Keep in Mind": C.muted };
+const TASK_LANE_SHORT = { "Today": "Today", "This Week": "This Week", "Keep in Mind": "Later" };
+
+// ─── Responsive board sizing ─────────────────────────────────────────────────
+// Layout follows measured width, not device name: three columns whenever each
+// can hold a usable ~280px, otherwise a single-column segmented view.
+const BOARD_MOBILE_MAX = 768;   // below this we always segment
+const BOARD_COL_MIN    = 280;   // narrowest a column may get before we segment
+const BOARD_GAP        = 14;
+
+function useViewportWidth() {
+  const [w, setW] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
+  useEffect(() => {
+    let raf = null;
+    function onResize() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setW(window.innerWidth));
+    }
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+  return w;
+}
+
+// Two densities so the user can trade detail for overview without browser zoom.
+const BOARD_DENSITY = {
+  compact:     { minH: 44, padV: 6,  padH: 10, font: 12,   line: 1.35, meta: 9,    gapY: 5, handle: 13 },
+  comfortable: { minH: 58, padV: 10, padH: 12, font: 13.5, line: 1.5,  meta: 10.5, gapY: 7, handle: 15 },
+};
 // Categorize tasks so Work always renders above Personal. Legacy cards with no
 // category default to "personal".
 const TASK_CATEGORIES = ["work", "personal"];
@@ -1026,23 +1059,45 @@ function taskDueLabel(iso) {
 }
 
 // The visual content of a task card (shared by the sortable card + drag overlay).
-function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps, dragging }) {
+function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps, dragging, density = "comfortable" }) {
   const cat = taskCategoryOf(card);
   const catColor = TASK_CATEGORY_COLOR[cat];
+  const D = BOARD_DENSITY[density] || BOARD_DENSITY.comfortable;
+  const subDone = (card.subtasks || []).filter(s => s.done).length;
+  const subTotal = (card.subtasks || []).length;
+  // Metadata is packed into one compact row so cards stay short at a glance.
+  const meta = [];
+  if (card.dueDate) {
+    const overdue = card.dueDate < isoDate();
+    const isToday = card.dueDate === isoDate();
+    meta.push({ key: "due", text: `📅 ${taskDueLabel(card.dueDate)}`, color: overdue ? C.red : isToday ? C.accent : C.muted });
+  }
+  if (card.recurrence?.kind === "weekly") {
+    meta.push({ key: "rec", text: `🔁 ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][card.recurrence.weekday]}`, color: C.blue });
+  }
+  if (subTotal > 0) meta.push({ key: "sub", text: `☑ ${subDone}/${subTotal}`, color: subDone === subTotal ? C.green : C.muted });
+  if (card.notes) meta.push({ key: "note", text: "📝", color: C.muted });
+  if (card.blocked) meta.push({ key: "blk", text: "⏸ waiting", color: C.yellow });
+
   return (
     <div style={{
       background: dragging ? "#222" : "#1a1a1a",
-      border: `1px solid ${dragging ? TASK_LANE_COLOR[lane] : C.border2}`,
-      borderRadius: 8, padding: "10px", marginBottom: 6,
-      display: "flex", alignItems: "flex-start", gap: 8,
+      border: `1px solid ${dragging ? TASK_LANE_COLOR[lane] : (card.blocked ? C.yellow + "55" : C.border2)}`,
+      borderRadius: 8, padding: `${D.padV}px ${D.padH}px`, marginBottom: D.gapY,
+      minHeight: D.minH, boxSizing: "border-box",
+      display: "flex", alignItems: "center", gap: 8,
       boxShadow: dragging ? "0 8px 24px rgba(0,0,0,0.5)" : "none",
+      opacity: card.blocked ? 0.8 : 1,
+      transition: "min-height 0.15s ease, padding 0.15s ease",
     }}>
-      {/* Grip icon — the whole card is draggable now, so this is just a visual affordance. */}
-      <span aria-hidden="true" style={{ flexShrink: 0, width: 22, height: 24, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 15, cursor: "grab", lineHeight: 1, marginTop: 0, pointerEvents: "none" }}>⠿</span>
+      {/* Drag handle — subtle but always available, on every device. Dragging
+          starts here immediately (never long-press-only). */}
+      <span {...(dragHandleProps || {})} aria-label="Drag to reorder"
+        style={{ flexShrink: 0, width: 20, alignSelf: "stretch", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: D.handle, cursor: "grab", lineHeight: 1, touchAction: "none", opacity: 0.55 }}>⠿</span>
       {/* Checkbox — Today lane only, and never on recurring templates (they aren't "done-able") */}
       {lane === "Today" && !card.recurrence && (
         <button aria-label="Complete task" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggle && onToggle(card.id); }}
-          style={{ flexShrink: 0, width: 22, height: 22, padding: 0, background: "transparent", border: "none", cursor: "pointer", marginTop: 1 }}>
+          style={{ flexShrink: 0, width: 22, height: 22, padding: 0, background: "transparent", border: "none", cursor: "pointer" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" style={{ display: "block" }}>
             <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={card.done?C.accent:"transparent"} stroke={card.done?C.accent:C.muted} strokeWidth="2"/>
             {card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"/>}
@@ -1050,16 +1105,12 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
         </button>
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, color: card.done?C.muted:C.text, fontFamily: MONO, lineHeight: 1.5, textDecoration: card.done?"line-through":"none", wordBreak: "break-word" }}>{card.text}</div>
-        {card.dueDate && (() => {
-          const isOverdue = card.dueDate < isoDate();
-          const isToday = card.dueDate === isoDate();
-          const color = isOverdue ? C.red : isToday ? C.accent : C.muted;
-          return <div style={{ fontSize: 10, color, fontFamily: MONO, marginTop: 3, letterSpacing: "0.03em" }}>📅 {taskDueLabel(card.dueDate)}</div>;
-        })()}
-        {card.recurrence?.kind === "weekly" && (
-          <div style={{ fontSize: 10, color: C.blue, fontFamily: MONO, marginTop: 3, letterSpacing: "0.03em" }}>
-            🔁 every {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][card.recurrence.weekday]}
+        <div style={{ fontSize: D.font, color: card.done?C.muted:C.text, fontFamily: MONO, lineHeight: D.line, textDecoration: card.done?"line-through":"none", wordBreak: "break-word" }}>{card.text}</div>
+        {meta.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 3 }}>
+            {meta.map(m => (
+              <span key={m.key} style={{ fontSize: D.meta, color: m.color, fontFamily: MONO, letterSpacing: "0.03em", whiteSpace: "nowrap" }}>{m.text}</span>
+            ))}
           </div>
         )}
       </div>
@@ -1069,11 +1120,11 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
           onPointerDown={e=>e.stopPropagation()}
           onClick={e=>{ e.stopPropagation(); onChangeCategory(card.id, cat === "work" ? "personal" : "work"); }}
           title={`${TASK_CATEGORY_LABEL[cat]} — tap to change`}
-          style={{ flexShrink: 0, alignSelf: "flex-start", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, cursor: "pointer", letterSpacing: "0.06em", fontWeight: 700, marginTop: 1, lineHeight: 1.4 }}>
+          style={{ flexShrink: 0, alignSelf: "center", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, cursor: "pointer", letterSpacing: "0.06em", fontWeight: 700, lineHeight: 1.4 }}>
           {cat === "work" ? "WORK" : "PERS"}
         </button>
       ) : (
-        <span style={{ flexShrink: 0, alignSelf: "flex-start", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, letterSpacing: "0.06em", fontWeight: 700, marginTop: 1, lineHeight: 1.4 }}>
+        <span style={{ flexShrink: 0, alignSelf: "center", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, letterSpacing: "0.06em", fontWeight: 700, lineHeight: 1.4 }}>
           {cat === "work" ? "WORK" : "PERS"}
         </span>
       )}
@@ -1081,15 +1132,25 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
   );
 }
 
-function SortableTaskCard({ card, lane, onToggle, onOpenMenu, onChangeCategory }) {
+function SortableTaskCard({ card, lane, onToggle, onOpenDetail, onChangeCategory, density, touchMode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id });
-  const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.4 : 1, cursor: isDragging ? "grabbing" : "grab", touchAction: "manipulation" };
-  // Drag listeners on the OUTER card so users can grab anywhere (not just ⠿).
-  // Mouse: 5px movement threshold means short clicks still open the menu.
-  // Touch: 180ms press-hold delay means scrolls & taps still work.
+  const dragProps = { ...attributes, ...listeners };
+  const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+  // Listeners live on exactly ONE element to avoid double-activation.
+  // Pointer devices: the whole card drags (5px threshold), and since the handle
+  // sits inside it, grabbing the handle works too. Touch: only the handle drags,
+  // so the lane still scrolls under your finger and taps stay clean.
+  const bodyDrag   = touchMode ? {} : dragProps;
+  const handleDrag = touchMode ? dragProps : {};
+  // Touch: a single tap opens detail (double-tap is awkward on phones).
+  // Pointer: single click is a no-op; double-click opens detail.
+  const openHandlers = touchMode
+    ? { onClick: () => onOpenDetail(card.id, lane) }
+    : { onDoubleClick: (e) => { e.stopPropagation(); onOpenDetail(card.id, lane); } };
   return (
-    <div ref={setNodeRef} {...attributes} {...listeners} style={style} onClick={()=>onOpenMenu(card.id, lane)}>
-      <TaskCardBody card={card} lane={lane} onToggle={onToggle} onChangeCategory={onChangeCategory} />
+    <div ref={setNodeRef} {...bodyDrag} {...openHandlers}
+      style={{ ...style, cursor: touchMode ? "pointer" : (isDragging ? "grabbing" : "grab"), touchAction: touchMode ? "auto" : "manipulation" }}>
+      <TaskCardBody card={card} lane={lane} onToggle={onToggle} onChangeCategory={onChangeCategory} density={density} dragHandleProps={handleDrag} />
     </div>
   );
 }
@@ -1098,12 +1159,22 @@ function SortableTaskCard({ card, lane, onToggle, onOpenMenu, onChangeCategory }
 // minHeight ensures dnd-kit's collision detection still has a real target
 // when the lane is empty — otherwise "Keep in Mind" (which often has no cards)
 // collapses to ~60px and becomes essentially undroppable.
-function TaskLane({ lane, color, itemIds, count, children, footer }) {
+function TaskLane({ lane, color, itemIds, count, children, footer, focused, onToggleFocus, flexBasis, fullWidth }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane });
   const isEmpty = (itemIds?.length || 0) === 0;
   return (
-    <div ref={setNodeRef} style={{ flex: "1 1 280px", minWidth: 240, minHeight: 340, background: C.card, border: `1px solid ${isOver?color:C.border}`, borderRadius: 12, padding: 14, transition: "border-color 0.15s", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+    <div ref={setNodeRef}
+      onDoubleClick={onToggleFocus ? (e)=>{ e.stopPropagation(); onToggleFocus(lane); } : undefined}
+      style={{
+        flex: fullWidth ? "1 1 100%" : `1 1 ${flexBasis || BOARD_COL_MIN}px`,
+        minWidth: 0, minHeight: 340,
+        background: C.card, border: `1px solid ${isOver?color:(focused?color+"66":C.border)}`,
+        borderRadius: 12, padding: 14,
+        transition: "border-color 0.15s, flex-basis 0.28s cubic-bezier(0.2,0.8,0.3,1)",
+        display: "flex", flexDirection: "column",
+      }}>
+      <div title={onToggleFocus ? "Double-click to focus this column" : undefined}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, cursor: onToggleFocus ? "pointer" : "default", userSelect: "none" }}>
         <div style={{ fontSize: 11, fontWeight: 700, color, fontFamily: MONO, letterSpacing: "0.06em" }}>{lane.toUpperCase()}</div>
         <span style={{ fontSize: 11, color: C.dim, fontFamily: MONO }}>{count}</span>
       </div>
@@ -1134,9 +1205,40 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   const [newCardDate, setNewCardDate] = useState(""); // optional due date for the new task
   const [newCardCat, setNewCardCat] = useState("personal"); // category picker: work vs personal
   const [timerBig, setTimerBig] = useState(false);   // click coffee cup → nearly full-screen focus mode
-  const [menuCard, setMenuCard] = useState(null); // { id, lane } for the move/action sheet
+  const [menuCard, setMenuCard] = useState(null); // { id, lane } for the detail view
+  const [newSubtask, setNewSubtask] = useState(""); // detail-view subtask input
   const [menuDateEdit, setMenuDateEdit] = useState(false); // schedule mode inside the menu
   const [activeId, setActiveId] = useState(null); // card id currently being dragged
+
+  // ── Responsive board layout ─────────────────────────────────────────────
+  const vw = useViewportWidth();
+  const isMobile = vw < BOARD_MOBILE_MAX;
+  // Usable content width inside the app shell (shell padding is 16px each side).
+  const contentW = Math.min(vw, 1600) - 32;
+  const fitsThreeCols = contentW >= (BOARD_COL_MIN * 3) + (BOARD_GAP * 2);
+  const segmented = isMobile || !fitsThreeCols;   // one lane at a time
+  const [activeLane, setActiveLane] = useState(TASK_LANES[0]);   // segmented view
+  const [focusedLane, setFocusedLane] = useState(null);          // desktop focus mode
+  const [density, setDensity] = useState(() => {
+    try { return localStorage.getItem("iron_board_density") || "comfortable"; } catch { return "comfortable"; }
+  });
+  function changeDensity(next) {
+    setDensity(next);
+    try { localStorage.setItem("iron_board_density", next); } catch {}
+  }
+  // Escape leaves column focus mode; Cmd/Ctrl +/− switches density.
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape" && focusedLane) { setFocusedLane(null); return; }
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === "-" || e.key === "_")      { e.preventDefault(); changeDensity("compact"); }
+      if (e.key === "=" || e.key === "+")      { e.preventDefault(); changeDensity("comfortable"); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusedLane]);
+  // Focus mode is a desktop affordance — drop it if we fall back to segmented.
+  useEffect(() => { if (segmented && focusedLane) setFocusedLane(null); }, [segmented, focusedLane]);
   const timerRef = useRef(null);
   const totalSecs = timerMins * 60;
   const remaining = Math.max(totalSecs - elapsed, 0);
@@ -1176,9 +1278,12 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   (board?.cols||[]).forEach(c=>c.cards.forEach(k=>{ cardById[k.id]=k; }));
   function laneCards(lane) { return (laneItems[lane]||[]).map(id=>cardById[id]).filter(Boolean); }
 
+  // Small distance thresholds on both sensors: a click/tap stays a click, but a
+  // real drag starts right away. On touch only the ⠿ handle carries the drag
+  // listeners, so the list still scrolls normally — no long-press required.
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { distance: 5 } }),
   );
   function findLane(id) {
     if (LANES.includes(id)) return id;
@@ -1320,17 +1425,60 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
         </div>
       )}
 
-      {/* Single board — 3 fixed lanes, Trello-style drag + reorder (touch-friendly) */}
-      <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",marginBottom:10,fontWeight:700}}>TASKS</div>
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd} onDragCancel={()=>setActiveId(null)}>
-        <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:8}}>
+      {/* Board — three columns on desktop (with per-column focus mode), a
+          segmented single-column view when width can't hold three. */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:10,flexWrap:"wrap"}}>
+        <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.15em",fontWeight:700}}>TASKS</div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {focusedLane && (
+            <button onClick={()=>setFocusedLane(null)}
+              style={{background:"transparent",border:`1px solid ${C.blue}66`,borderRadius:7,color:C.blue,fontSize:10,fontFamily:MONO,padding:"4px 10px",cursor:"pointer",letterSpacing:"0.04em"}}>← Back to board</button>
+          )}
+          {/* Density toggle — overview vs readability, without browser zoom. */}
+          <div style={{display:"flex",border:`1px solid ${C.border2}`,borderRadius:7,overflow:"hidden"}}>
+            {[["compact","Compact"],["comfortable","Comfortable"]].map(([key,label])=>(
+              <button key={key} onClick={()=>changeDensity(key)}
+                title={key==="compact"?"More tasks on screen (Ctrl/Cmd −)":"Easier reading (Ctrl/Cmd +)"}
+                style={{background:density===key?C.accent+"22":"transparent",color:density===key?C.accent:C.muted,border:"none",fontSize:9.5,fontFamily:MONO,padding:"5px 10px",cursor:"pointer",letterSpacing:"0.05em",fontWeight:density===key?700:400}}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Segmented lane switcher — only when we can't fit three columns */}
+      {segmented && (
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
           {LANES.map(lane=>{
+            const active = activeLane===lane;
+            const n = laneCards(lane).length;
+            return (
+              <button key={lane} onClick={()=>setActiveLane(lane)}
+                style={{flex:1,background:active?laneColor[lane]+"22":"transparent",border:`1px solid ${active?laneColor[lane]:C.border2}`,borderRadius:8,color:active?laneColor[lane]:C.muted,padding:"9px 4px",fontSize:11,fontFamily:MONO,cursor:"pointer",fontWeight:active?700:400,letterSpacing:"0.03em"}}>
+                {TASK_LANE_SHORT[lane]} <span style={{opacity:0.7,fontSize:10}}>{n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd} onDragCancel={()=>setActiveId(null)}>
+        <div style={{display:"flex",gap:BOARD_GAP,paddingBottom:8,alignItems:"flex-start"}}>
+          {LANES.filter(lane => {
+            if (segmented) return lane === activeLane;
+            if (focusedLane) return lane === focusedLane;
+            return true;
+          }).map(lane=>{
             const lc = laneColor[lane];
             const cards = laneCards(lane);
             const rows = groupTasksForRender(cards);
             const sortedIds = rows.filter(r=>r.kind==="card").map(r=>r.card.id);
             return (
               <TaskLane key={lane} lane={lane} color={lc} itemIds={sortedIds} count={cards.length}
+                fullWidth={segmented || !!focusedLane}
+                focused={focusedLane===lane}
+                onToggleFocus={segmented ? null : (l)=>setFocusedLane(cur => cur===l ? null : l)}
                 footer={
                   addingLane===lane
                     ? <div>
@@ -1363,7 +1511,9 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     {TASK_CATEGORY_LABEL[row.category]}
                   </div>
                 ) : (
-                  <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask} onOpenMenu={(id,ln)=>setMenuCard({id,lane:ln})}
+                  <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask}
+                    onOpenDetail={(id,ln)=>setMenuCard({id,lane:ln})}
+                    density={density} touchMode={isMobile}
                     onChangeCategory={onUpdateTask ? (id, next) => onUpdateTask(id, { category: next }) : null} />
                 ))}
               </TaskLane>
@@ -1371,83 +1521,161 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
           })}
         </div>
         <DragOverlay dropAnimation={null}>
-          {activeId && cardById[activeId] ? <div style={{width:206}}><TaskCardBody card={cardById[activeId]} lane={findLane(activeId)} dragging /></div> : null}
+          {activeId && cardById[activeId] ? <div style={{width:260}}><TaskCardBody card={cardById[activeId]} lane={findLane(activeId)} density={density} dragging /></div> : null}
         </DragOverlay>
       </DndContext>
-      <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>Click-and-drag any card to reorder or move between lanes (press-and-hold on mobile). Tap a card for more options. Today tasks show on your Home checklist.</div>
+      <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>
+        Drag the ⠿ handle to reorder or move between lanes{segmented ? "" : " — or drag the card itself"}.
+        {segmented ? " Tap a card to open it." : " Double-click a card to open it, or a column header to focus that column."}
+        {" "}Today tasks show on your Home checklist.
+      </div>
 
-      {/* Card action sheet (move / complete / delete) */}
+      {/* Task detail — centered modal on desktop, bottom sheet on mobile */}
       {menuCard && (() => {
         const card = board?.cols?.flatMap(c=>c.cards).find(k=>k.id===menuCard.id);
         if (!card) { return null; }
+        const patch = (p) => { if (onUpdateTask) onUpdateTask(menuCard.id, p); };
+        const subtasks = card.subtasks || [];
+        const setSubtasks = (next) => patch({ subtasks: next });
         return (
-          <div onClick={()=>setMenuCard(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:160,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
-            <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:480,background:"#0d0d0d",border:`1px solid ${C.border}`,borderRadius:"18px 18px 0 0",padding:"16px 16px calc(20px + env(safe-area-inset-bottom))"}}>
-              {/* Editable card text — commit on blur or Enter (Shift+Enter for newline) */}
+          <div onClick={()=>setMenuCard(null)}
+            style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:160,display:"flex",alignItems:isMobile?"flex-end":"center",justifyContent:"center",padding:isMobile?0:24,backdropFilter:"blur(2px)"}}>
+            <div onClick={e=>e.stopPropagation()}
+              style={{
+                width:"100%", maxWidth:isMobile?"none":620,
+                maxHeight:isMobile?"88vh":"86vh", overflowY:"auto",
+                background:"#0d0d0d", border:`1px solid ${C.border}`,
+                borderRadius:isMobile?"18px 18px 0 0":16,
+                padding:isMobile?"16px 16px calc(20px + env(safe-area-inset-bottom))":"20px 22px 22px",
+                boxShadow:"0 24px 70px rgba(0,0,0,0.6)",
+                animation:"prPop 0.22s cubic-bezier(0.2,0.9,0.3,1)",
+              }}>
+              {/* Header: lane + close */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <span style={{fontSize:9,color:laneColor[menuCard.lane],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700}}>{menuCard.lane.toUpperCase()}</span>
+                <button onClick={()=>setMenuCard(null)} style={{background:"transparent",border:"none",color:C.muted,fontSize:17,cursor:"pointer",lineHeight:1,padding:"2px 4px"}}>✕</button>
+              </div>
+
+              {/* Title */}
               <textarea defaultValue={card.text} rows={2} onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); e.target.blur(); } }}
-                onBlur={e=>{ const next = e.target.value.trim(); if(onUpdateTask && next && next !== card.text) onUpdateTask(menuCard.id, { text: next }); }}
-                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:13,fontFamily:MONO,lineHeight:1.5,padding:"10px 12px",outline:"none",resize:"vertical",boxSizing:"border-box",marginBottom:8}}/>
-              {card.dueDate && (
-                <div style={{fontSize:11,color:card.dueDate<isoDate()?C.red:card.dueDate===isoDate()?C.accent:C.muted,fontFamily:MONO,marginBottom:8}}>📅 {taskDueLabel(card.dueDate)} <span style={{color:C.dim}}>· {card.dueDate}</span></div>
-              )}
-              <div style={{paddingBottom:12,marginBottom:14,borderBottom:`1px solid ${C.border}`}}/>
+                onBlur={e=>{ const next = e.target.value.trim(); if(next && next !== card.text) patch({ text: next }); }}
+                style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:15,fontWeight:600,fontFamily:MONO,lineHeight:1.5,padding:"11px 12px",outline:"none",resize:"vertical",boxSizing:"border-box",marginBottom:14}}/>
 
-              {/* Category */}
-              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>CATEGORY</div>
-              <div style={{display:"flex",gap:6,marginBottom:14}}>
-                {TASK_CATEGORIES.map(cat => {
-                  const active = taskCategoryOf(card) === cat;
-                  return (
-                    <button key={cat} onClick={()=>{ if (onUpdateTask) onUpdateTask(menuCard.id, { category: cat }); }}
-                      style={{flex:1,background:active?TASK_CATEGORY_COLOR[cat]+"22":"transparent",border:`1px solid ${active?TASK_CATEGORY_COLOR[cat]:C.border}`,borderRadius:8,color:active?TASK_CATEGORY_COLOR[cat]:C.text,padding:"11px",fontSize:12,fontFamily:MONO,cursor:"pointer",fontWeight:active?700:400,letterSpacing:"0.05em"}}>
-                      {TASK_CATEGORY_LABEL[cat]}
-                    </button>
-                  );
-                })}
+              {/* Two-column layout on desktop keeps the modal short */}
+              <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?0:18}}>
+                <div>
+                  {/* Category */}
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>CATEGORY</div>
+                  <div style={{display:"flex",gap:6,marginBottom:14}}>
+                    {TASK_CATEGORIES.map(cat => {
+                      const active = taskCategoryOf(card) === cat;
+                      return (
+                        <button key={cat} onClick={()=>patch({ category: cat })}
+                          style={{flex:1,background:active?TASK_CATEGORY_COLOR[cat]+"22":"transparent",border:`1px solid ${active?TASK_CATEGORY_COLOR[cat]:C.border}`,borderRadius:8,color:active?TASK_CATEGORY_COLOR[cat]:C.text,padding:"9px",fontSize:11,fontFamily:MONO,cursor:"pointer",fontWeight:active?700:400,letterSpacing:"0.05em"}}>
+                          {TASK_CATEGORY_LABEL[cat]}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Dates */}
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>START</div>
+                  <input type="date" value={card.startDate || ""}
+                    onChange={e=>patch({ startDate: e.target.value || null })}
+                    style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:card.startDate?C.text:C.muted,padding:"9px 11px",fontSize:12,fontFamily:MONO,outline:"none",colorScheme:"dark",boxSizing:"border-box",marginBottom:12}}/>
+
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>DUE</div>
+                  <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center"}}>
+                    <input type="date" value={card.dueDate || ""}
+                      onChange={e=>patch({ dueDate: e.target.value || null })}
+                      style={{flex:1,minWidth:0,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:card.dueDate?C.accent:C.muted,padding:"9px 11px",fontSize:12,fontFamily:MONO,outline:"none",colorScheme:"dark"}}/>
+                    {card.dueDate && (
+                      <button onClick={()=>patch({ dueDate: null })}
+                        style={{flexShrink:0,background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"9px 10px",fontSize:10,cursor:"pointer",fontFamily:MONO}}>Clear</button>
+                    )}
+                  </div>
+
+                  {/* Repeats */}
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>REPEATS</div>
+                  <select value={card.recurrence?.weekday ?? ""}
+                    onChange={e=>{
+                      const v = e.target.value;
+                      if (v === "") patch({ recurrence: null });
+                      else patch({ recurrence: { kind: "weekly", weekday: parseInt(v) } });
+                    }}
+                    style={{width:"100%",background:"#161616",border:`1px solid ${card.recurrence?C.blue:C.border2}`,borderRadius:8,color:card.recurrence?C.blue:C.text,padding:"9px 11px",fontSize:12,fontFamily:MONO,outline:"none",colorScheme:"dark",marginBottom:14,boxSizing:"border-box"}}>
+                    <option value="">Doesn't repeat</option>
+                    <option value="1">Every Monday</option>
+                    <option value="2">Every Tuesday</option>
+                    <option value="3">Every Wednesday</option>
+                    <option value="4">Every Thursday</option>
+                    <option value="5">Every Friday</option>
+                    <option value="6">Every Saturday</option>
+                    <option value="0">Every Sunday</option>
+                  </select>
+
+                  {/* Waiting / blocked */}
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>STATUS</div>
+                  <button onClick={()=>patch({ blocked: !card.blocked })}
+                    style={{width:"100%",background:card.blocked?C.yellow+"1a":"transparent",border:`1px solid ${card.blocked?C.yellow:C.border2}`,borderRadius:8,color:card.blocked?C.yellow:C.muted,padding:"10px",fontSize:11,fontFamily:MONO,cursor:"pointer",marginBottom:14,letterSpacing:"0.04em",fontWeight:card.blocked?700:400}}>
+                    {card.blocked ? "⏸ Waiting on something" : "Mark as waiting / blocked"}
+                  </button>
+                </div>
+
+                <div>
+                  {/* Notes */}
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>NOTES</div>
+                  <textarea defaultValue={card.notes || ""} rows={4} placeholder="Context, links, next step…"
+                    onBlur={e=>{ const v = e.target.value; if ((card.notes||"") !== v) patch({ notes: v || null }); }}
+                    style={{width:"100%",background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,fontSize:12,fontFamily:MONO,lineHeight:1.55,padding:"10px 11px",outline:"none",resize:"vertical",boxSizing:"border-box",marginBottom:14}}/>
+
+                  {/* Subtasks */}
+                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>
+                    SUBTASKS {subtasks.length>0 && <span style={{color:C.muted}}>· {subtasks.filter(s=>s.done).length}/{subtasks.length}</span>}
+                  </div>
+                  {subtasks.map((st, i) => (
+                    <div key={st.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                      <button aria-label="Toggle subtask" onClick={()=>setSubtasks(subtasks.map(x=>x.id===st.id?{...x,done:!x.done}:x))}
+                        style={{flexShrink:0,width:18,height:18,padding:0,background:"transparent",border:"none",cursor:"pointer"}}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" style={{display:"block"}}>
+                          <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={st.done?C.green:"transparent"} stroke={st.done?C.green:C.muted} strokeWidth="2.2"/>
+                          {st.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>}
+                        </svg>
+                      </button>
+                      <input defaultValue={st.text}
+                        onBlur={e=>{ const v=e.target.value.trim(); if(!v) setSubtasks(subtasks.filter(x=>x.id!==st.id)); else if(v!==st.text) setSubtasks(subtasks.map(x=>x.id===st.id?{...x,text:v}:x)); }}
+                        onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }}
+                        style={{flex:1,minWidth:0,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,color:st.done?C.muted:C.text,fontSize:12,fontFamily:MONO,padding:"4px 2px",outline:"none",textDecoration:st.done?"line-through":"none"}}/>
+                      <button aria-label="Remove subtask" onClick={()=>setSubtasks(subtasks.filter(x=>x.id!==st.id))}
+                        style={{flexShrink:0,background:"transparent",border:"none",color:"#666",fontSize:12,cursor:"pointer",padding:"2px 4px"}}>✕</button>
+                    </div>
+                  ))}
+                  <input placeholder="+ Add subtask" value={newSubtask}
+                    onChange={e=>setNewSubtask(e.target.value)}
+                    onKeyDown={e=>{
+                      if(e.key==="Enter" && newSubtask.trim()){
+                        setSubtasks([...subtasks,{id:uid(),text:newSubtask.trim(),done:false}]);
+                        setNewSubtask("");
+                      }
+                    }}
+                    style={{width:"100%",background:"#161616",border:`1px dashed ${C.border2}`,borderRadius:8,color:C.text,fontSize:11.5,fontFamily:MONO,padding:"8px 10px",outline:"none",boxSizing:"border-box",marginBottom:14}}/>
+                </div>
               </div>
 
-              {/* Schedule */}
-              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>SCHEDULE</div>
-              <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
-                <input type="date" min={isoDate()} value={card.dueDate || ""}
-                  onChange={e=>{ if (onUpdateTask) onUpdateTask(menuCard.id, { dueDate: e.target.value || null }); }}
-                  style={{flex:1,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:card.dueDate?C.accent:C.muted,padding:"10px 12px",fontSize:13,fontFamily:MONO,outline:"none",colorScheme:"dark"}}/>
-                {card.dueDate && (
-                  <button onClick={()=>{ if (onUpdateTask) onUpdateTask(menuCard.id, { dueDate: null }); }}
-                    style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"10px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO}}>Clear</button>
-                )}
+              {/* Move to */}
+              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>MOVE TO</div>
+              <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+                {LANES.map(lane=>(
+                  <button key={lane} disabled={lane===menuCard.lane}
+                    onClick={()=>{onMoveTask(menuCard.id,lane);setMenuCard(m=>m?{...m,lane}:m);}}
+                    style={{flex:"1 1 120px",background:lane===menuCard.lane?laneColor[lane]+"1a":"transparent",border:`1px solid ${lane===menuCard.lane?laneColor[lane]:C.border}`,borderRadius:8,color:lane===menuCard.lane?laneColor[lane]:C.text,padding:"10px 8px",fontSize:11.5,fontFamily:MONO,cursor:lane===menuCard.lane?"default":"pointer",fontWeight:lane===menuCard.lane?700:400}}>
+                    {lane}
+                  </button>
+                ))}
               </div>
 
-              {/* Recurring — turns this card into a weekly template that spawns
-                  a fresh instance into Today whenever the chosen weekday hits. */}
-              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>REPEATS</div>
-              <select value={card.recurrence?.weekday ?? ""}
-                onChange={e=>{
-                  if (!onUpdateTask) return;
-                  const v = e.target.value;
-                  if (v === "") onUpdateTask(menuCard.id, { recurrence: null });
-                  else onUpdateTask(menuCard.id, { recurrence: { kind: "weekly", weekday: parseInt(v) } });
-                }}
-                style={{width:"100%",background:"#161616",border:`1px solid ${card.recurrence?C.blue:C.border2}`,borderRadius:8,color:card.recurrence?C.blue:C.text,padding:"10px 12px",fontSize:13,fontFamily:MONO,outline:"none",colorScheme:"dark",marginBottom:14}}>
-                <option value="">Doesn't repeat</option>
-                <option value="1">Every Monday</option>
-                <option value="2">Every Tuesday</option>
-                <option value="3">Every Wednesday</option>
-                <option value="4">Every Thursday</option>
-                <option value="5">Every Friday</option>
-                <option value="6">Every Saturday</option>
-                <option value="0">Every Sunday</option>
-              </select>
-
-              <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:8}}>MOVE TO</div>
-              {LANES.map(lane=>(
-                <button key={lane} disabled={lane===menuCard.lane} onClick={()=>{onMoveTask(menuCard.id,lane);setMenuCard(null);}}
-                  style={{width:"100%",textAlign:"left",background:lane===menuCard.lane?"#161616":"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:lane===menuCard.lane?C.dim:C.text,padding:"11px 14px",fontSize:13,fontFamily:MONO,cursor:lane===menuCard.lane?"default":"pointer",marginBottom:6}}>
-                  {lane}{lane===menuCard.lane?"  (current)":""}
-                </button>
-              ))}
-              <div style={{display:"flex",gap:8,marginTop:8}}>
-                {menuCard.lane==="Today" && (
+              <div style={{display:"flex",gap:8,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+                {menuCard.lane==="Today" && !card.recurrence && (
                   <button onClick={()=>{onToggleTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>{card.done?"Mark not done":"Complete"}</button>
                 )}
                 <button onClick={()=>{onRemoveTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>Delete</button>
@@ -3865,7 +4093,7 @@ export default function App() {
   const setBoards = boardsState.setAll;
   const addCustomExercise = (name, muscle, cat) => customExState.add(name, muscle, cat);
 
-  // Single task board (Today / In Progress / Keep in Mind) — Home + Focus share this
+  // Single task board (Today / This Week / Keep in Mind) — Home + Focus share this
   const board = boards[0] || null;
   // Tasks in the Today lane with a future due date are scheduled — hidden
   // from the Home "TODAY" checklist until that date arrives.
@@ -3889,6 +4117,10 @@ export default function App() {
       if (k.id !== cardId) return k;
       const next = { ...k, ...patch };
       if (patch.dueDate === null || patch.dueDate === "") delete next.dueDate;
+      if (patch.startDate === null || patch.startDate === "") delete next.startDate;
+      if (patch.notes === null || patch.notes === "") delete next.notes;
+      if (patch.blocked === false) delete next.blocked;
+      if (Array.isArray(patch.subtasks) && patch.subtasks.length === 0) delete next.subtasks;
       if (patch.recurrence === null) { delete next.recurrence; delete next.lastSpawned; }
       return next;
     }) })) }));
@@ -4188,6 +4420,10 @@ export default function App() {
     );
   }
 
+  // The Focus board wants real estate — three ~300px columns plus gaps. Other
+  // tabs stay narrower so long text lines don't sprawl.
+  const shellMax = tab === "focus" ? 1600 : 1100;
+
   const TABS = [
     { key:"home",   icon:"🏠", label:"Home"   },
     { key:"iron",   icon:"🏋", label:"Iron"   },
@@ -4196,7 +4432,7 @@ export default function App() {
   ];
 
   return (
-    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:1100,margin:"0 auto",position:"relative"}}>
+    <div style={{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:MONO,maxWidth:shellMax,margin:"0 auto",position:"relative",transition:"max-width 0.25s ease"}}>
 
       {/* Top bar */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 18px",paddingTop:"calc(12px + env(safe-area-inset-top))",position:"sticky",top:0,zIndex:25,background:C.bg+"f2",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderBottom:`1px solid ${C.border}`}}>
@@ -4255,7 +4491,7 @@ export default function App() {
       {previewPR && <PRCelebration pr={previewPR} onClose={()=>setPreviewPR(null)}/>}
 
       {/* Bottom nav */}
-      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:1100,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)"}}>
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:shellMax,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)",transition:"max-width 0.25s ease"}}>
         {TABS.map(t=>{
           const active = tab===t.key;
           return (
