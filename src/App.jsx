@@ -323,40 +323,44 @@ function isoDate(d=new Date()) {
   const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 10);
 }
-function e1RM(w, r) { if (!w || !r) return 0; return Math.round(w * (1 + r/30)); }
 function formatDuration(sec) { if (!sec || sec < 60) return `${sec||0}s`; return `${Math.round(sec/60)} min`; }
-// A "bodyweight" set is one the user explicitly marked with 0 weight + reps
-// (pull-ups, push-ups, dips, etc.). For these, the PR metric is REPS, not e1RM.
+// Exercises that are bodyweight by default — new blocks start in BW mode
+// (reps only, no weight field) so you never have to think about it.
+const DEFAULT_BW_EXERCISES = new Set([
+  "pullup","chinup","pushup","dip","burpee","box_jump","jump_rope","nordic","glute_bridge",
+  "plank","side_plank","russian_twist","hanging_leg","crunch","bicycle_crunch","sit_up",
+  "leg_raise","ab_wheel","dead_bug","mountain_climber",
+]);
+// A "bodyweight" set carries reps but no meaningful weight.
 function isBwSet(s) {
   const r = parseInt(s?.reps);
   if (!r) return false;
-  if (s?.weight === "" || s?.weight == null) return false;
-  return parseFloat(s.weight) === 0;
+  const w = parseFloat(s?.weight);
+  return s?.weight === "" || s?.weight == null || isNaN(w) || w === 0;
 }
 // Returns { kind: "weight"|"bw"|null, value } so PR comparisons stay in the
-// right "space" — weighted sets compare e1RM, bodyweight sets compare reps.
-// Blank weight + reps is treated as bodyweight (matches the save-time
-// convention) so PRs actually fire mid-workout for abs/pullups/dips/etc.
-function setMetric(s) {
+// right "space". PR metric is deliberately simple and legible:
+//   weighted  → heaviest WEIGHT in lbs
+//   bodyweight → most REPS in a single set
+// (Previously this used an estimated-1RM formula, which read as arbitrary.)
+function setMetric(s, bwMode = false) {
   const r = parseInt(s?.reps);
   if (!r) return { kind: null, value: 0 };
-  const wRaw = s?.weight;
-  const w = parseFloat(wRaw);
-  if (wRaw === "" || wRaw == null || isNaN(w) || w === 0) return { kind: "bw", value: r };
-  return { kind: "weight", value: Math.round(w * (1 + r/30)) };
+  if (bwMode || isBwSet(s)) return { kind: "bw", value: r };
+  return { kind: "weight", value: parseFloat(s.weight) };
 }
-// Per-exercise best across history: { exId: { e1rm, bwReps } }.
+// Per-exercise best across history: { exId: { maxWeight, bwReps } }.
 function bestByExercise(history, excludeId=null) {
   const out = {};
   for (const wk of history) {
     if (excludeId && wk.id === excludeId) continue;
     for (const ex of (wk.exercises || [])) {
-      const rec = out[ex.exId] || { e1rm: 0, bwReps: 0 };
+      const rec = out[ex.exId] || { maxWeight: 0, bwReps: 0 };
       for (const s of (ex.sets || [])) {
         if (!s.done) continue;
         const m = setMetric(s);
-        if (m.kind === "weight" && m.value > rec.e1rm)   rec.e1rm = m.value;
-        if (m.kind === "bw"     && m.value > rec.bwReps) rec.bwReps = m.value;
+        if (m.kind === "weight" && m.value > rec.maxWeight) rec.maxWeight = m.value;
+        if (m.kind === "bw"     && m.value > rec.bwReps)    rec.bwReps    = m.value;
       }
       out[ex.exId] = rec;
     }
@@ -804,8 +808,9 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
 }
 
 // ─── IRON TAB ─────────────────────────────────────────────────────────────────
-function IronTab({ history, onStartWorkout }) {
+function IronTab({ history, onStartWorkout, draft = null, onResumeDraft, onDiscardDraft }) {
   const wkWorkouts = thisWeekCount(history);
+  const draftSets = draft ? (draft.exercises || []).reduce((a,ex)=>a+(ex.sets||[]).filter(s=>parseInt(s.reps)>0).length,0) : 0;
 
   const PROGRAMS = [
     { id:"ppl", name:"Push Pull Legs", tag:"PPL · 3×/week", days:[
@@ -831,6 +836,24 @@ function IronTab({ history, onStartWorkout }) {
         <div style={{fontSize:11,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>Start a session, pick a program, or scroll down to backfill a past day.</div>
       </div>
 
+      {/* Unfinished draft — nothing is in your history until it's locked in */}
+      {draft && (
+        <div style={{background:`linear-gradient(160deg, ${C.card}, ${C.surface})`,border:`1px solid ${C.blue}66`,borderRadius:14,padding:"14px 16px",marginBottom:16,boxShadow:`0 0 24px ${C.blue}12`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4,gap:8}}>
+            <div style={{fontSize:10,color:C.blue,fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700}}>IN PROGRESS</div>
+            {onDiscardDraft && (
+              <button onClick={()=>{ if(window.confirm("Discard this unfinished workout?")) onDiscardDraft(); }}
+                style={{background:"transparent",border:"none",color:C.muted,fontSize:10,cursor:"pointer",fontFamily:MONO}}>Discard</button>
+            )}
+          </div>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:2}}>{draft.name || "Workout"}</div>
+          <div style={{fontSize:11,color:C.muted,fontFamily:MONO,marginBottom:12}}>
+            {(draft.exercises||[]).length} exercise{(draft.exercises||[]).length===1?"":"s"} · {draftSets} set{draftSets===1?"":"s"} logged · not saved yet
+          </div>
+          <button onClick={onResumeDraft} style={{width:"100%",background:C.blue,color:"#000",border:"none",borderRadius:10,padding:"12px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Resume workout →</button>
+        </div>
+      )}
+
       {/* Stats strip — raw workout counts. The "is this enough?" judgement
           lives on the Home tab's weekly-goals card and the Trends tab. */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
@@ -839,10 +862,10 @@ function IronTab({ history, onStartWorkout }) {
       </div>
 
       {/* Start workout */}
-      <button style={{width:"100%",background:C.accent,color:"#000",border:"none",borderRadius:12,padding:"16px 18px",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:12,fontFamily:MONO,marginBottom:16,textAlign:"left"}}
+      <button style={{width:"100%",background:draft?"transparent":C.accent,color:draft?C.accent:"#000",border:draft?`1px solid ${C.accent}`:"none",borderRadius:12,padding:"16px 18px",fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:12,fontFamily:MONO,marginBottom:16,textAlign:"left"}}
         onClick={()=>onStartWorkout([])}>
         <span style={{fontSize:20}}>▶</span>
-        <div><div>Start Empty Workout</div><div style={{fontSize:11,color:"rgba(0,0,0,0.5)",marginTop:2}}>Log any exercises</div></div>
+        <div><div>Start Empty Workout</div><div style={{fontSize:11,color:draft?C.muted:"rgba(0,0,0,0.5)",marginTop:2}}>Log any exercises</div></div>
       </button>
 
       {/* Programs */}
@@ -2096,10 +2119,29 @@ function WorkoutScreen({
   onAddCustom = null,
   history = [],
   excludeWorkoutId = null,
+  onSaveDraft = null,     // called continuously in live mode to persist a draft
+  onDiscardDraft = null,  // called on explicit discard / successful publish
+  draftStartedAt = null,  // preserves elapsed time across exit + resume
 }) {
   // Merged catalogs that include user-created exercises
   const mergedNames = {...EXERCISES, ...Object.fromEntries(Object.entries(customExercises).map(([id,c])=>[id,c.name]))};
   const mergedMeta  = {...EX_META,    ...Object.fromEntries(Object.entries(customExercises).map(([id,c])=>[id,{muscle:c.muscle, cat:c.cat}]))};
+
+  // Should a freshly-added exercise start in bodyweight (reps-only) mode?
+  function defaultBwFor(exId) {
+    if (DEFAULT_BW_EXERCISES.has(exId)) return true;
+    const cat = mergedMeta[exId]?.cat;
+    return cat === "Abs" || cat === "PT";
+  }
+  // For blocks loaded from history/drafts that predate the bw flag, infer it:
+  // every set with reps has no real weight ⇒ it was a bodyweight exercise.
+  function inferBw(block) {
+    if (typeof block.bw === "boolean") return block.bw;
+    const withReps = (block.sets || []).filter(s => parseInt(s.reps) > 0);
+    if (withReps.length > 0 && withReps.every(isBwSet)) return true;
+    if (withReps.length === 0) return defaultBwFor(block.exId);
+    return false;
+  }
 
   // PR detection — compute previous bests once on mount
   const prevBestsRef = useRef(null);
@@ -2110,18 +2152,19 @@ function WorkoutScreen({
   const [setFlash, setSetFlash] = useState(null);
   if (prevBestsRef.current === null) prevBestsRef.current = bestByExercise(history, excludeWorkoutId);
   const [exercises, setExercises] = useState(() =>
-    initialBlocks || initExercises.map(id=>({id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}))
+    initialBlocks
+      ? initialBlocks.map(b => ({ ...b, bw: inferBw(b) }))
+      : initExercises.map(id=>({id:uid(),exId:id,bw:defaultBwFor(id),sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}))
   );
   const [workoutName, setWorkoutName] = useState(initWorkoutName || "Workout");
   const [elapsed, setElapsed] = useState(initialElapsedSec);
   const [date, setDate] = useState(initialDate || isoDate());
   const [showPicker, setShowPicker] = useState(false);
   const isLive = mode === "live";
-  const startTimeRef = useRef(Date.now()); // silently track live workout duration (no visible timer)
+  const startTimeRef = useRef(draftStartedAt || Date.now()); // silently track live workout duration (no visible timer)
   // Volume + sets count only COMPLETED sets (M-5)
   function totalVol(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);}
   function compSets(exs){return exs.reduce((a,ex)=>a+ex.sets.filter(s=>s.done).length,0);}
-  function e1RM(w,r){if(!w||!r)return 0;return Math.round(w*(1+r/30));}
   const done=compSets(exercises); const vol=totalVol(exercises);
   // A set with reps filled counts as logged (weight is optional — bodyweight
   // exercises like plank, hanging leg raise, Russian twist have reps only).
@@ -2135,12 +2178,34 @@ function WorkoutScreen({
     for (const w of history) {
       for (const ex of (w.exercises||[])) {
         if (map[ex.exId]) continue;
-        const doneSets = (ex.sets||[]).filter(s => s.done && s.weight && s.reps);
-        if (doneSets.length) { const t = doneSets[doneSets.length-1]; map[ex.exId] = { weight: String(t.weight), reps: String(t.reps) }; }
+        const doneSets = (ex.sets||[]).filter(s => s.done && parseInt(s.reps) > 0);
+        if (doneSets.length) { const t = doneSets[doneSets.length-1]; map[ex.exId] = { weight: String(t.weight ?? ""), reps: String(t.reps) }; }
       }
     }
     return map;
   })();
+
+  // Resolve what a set ACTUALLY means when logged. If the user leaves a field
+  // blank, the greyed-out placeholder (last time's numbers) is what they saw —
+  // so that's what gets recorded. Fixes "it said 135 but logged as bodyweight".
+  function effectiveSet(s, block) {
+    const ref = lastByExercise[block.exId];
+    const reps = (s.reps !== "" && s.reps != null) ? s.reps : (ref?.reps ?? "");
+    if (block.bw) return { ...s, weight: "0", reps };
+    const weight = (s.weight !== "" && s.weight != null) ? s.weight : (ref?.weight ?? "");
+    return { ...s, weight, reps };
+  }
+
+  // ── Draft autosave (live mode only) ───────────────────────────────────────
+  // Every edit persists so you can leave the workout and come back to it.
+  // Nothing is written to your history until you tap "Lock it in".
+  useEffect(() => {
+    if (!isLive || !onSaveDraft) return;
+    if (exercises.length === 0) return;
+    onSaveDraft({
+      exercises, name: workoutName, startedAt: startTimeRef.current, savedAt: Date.now(),
+    });
+  }, [exercises, workoutName, isLive]);
   const ALL_EX=Object.entries(mergedNames);
   const [exSearch,setExSearch]=useState(""); const [exCat,setExCat]=useState("All");
   const [creatingCustom,setCreatingCustom]=useState(false);
@@ -2158,17 +2223,17 @@ function WorkoutScreen({
     // or null. Mutates prevBestsRef so subsequent finish attempts don't re-fire.
     for (const ex of finalizedExs) {
       if (mergedMeta[ex.exId]?.cat === "Cardio") continue;
-      const prev = prevBestsRef.current[ex.exId] || { e1rm: 0, bwReps: 0 };
+      const prev = prevBestsRef.current[ex.exId] || { maxWeight: 0, bwReps: 0 };
       let bestSet = null, bestM = null;
       for (const s of ex.sets) {
         if (!s.done || prTriggeredRef.current.has(s.id)) continue;
-        const m = setMetric(s);
-        if (m.kind === "weight" && m.value > prev.e1rm && (!bestM || m.value > bestM.value)) { bestSet = s; bestM = m; }
+        const m = setMetric(s, ex.bw);
+        if (m.kind === "weight" && m.value > prev.maxWeight && (!bestM || m.value > bestM.value)) { bestSet = s; bestM = m; }
         else if (m.kind === "bw" && m.value > prev.bwReps && (!bestM || m.value > bestM.value)) { bestSet = s; bestM = m; }
       }
       if (bestSet && bestM) {
-        const prevVal = bestM.kind === "weight" ? prev.e1rm : prev.bwReps;
-        if (bestM.kind === "weight") prev.e1rm = bestM.value; else prev.bwReps = bestM.value;
+        const prevVal = bestM.kind === "weight" ? prev.maxWeight : prev.bwReps;
+        if (bestM.kind === "weight") prev.maxWeight = bestM.value; else prev.bwReps = bestM.value;
         prevBestsRef.current[ex.exId] = prev;
         prTriggeredRef.current.add(bestSet.id);
         return { exId: ex.exId, exName: mergedNames[ex.exId] || ex.exId, kind: bestM.kind, value: bestM.value, prev: prevVal, weight: bestSet.weight, reps: bestSet.reps };
@@ -2177,7 +2242,10 @@ function WorkoutScreen({
     return null;
   }
 
-  async function finalizeAndPersist(pkg) { await onFinish(pkg); }
+  async function finalizeAndPersist(pkg) {
+    if (onDiscardDraft) onDiscardDraft();   // published — draft no longer needed
+    await onFinish(pkg);
+  }
 
   // Called by the PR popup's onClose — either auto-close (6s) or tap-to-dismiss.
   // If we deferred a save behind it, complete that save now.
@@ -2191,16 +2259,16 @@ function WorkoutScreen({
     setSaving(true);
     const finalDate = isLive ? new Date().toISOString() : new Date(date + "T12:00:00").toISOString();
     const finalElapsed = isLive ? Math.round((Date.now() - startTimeRef.current)/1000) : elapsed;
-    // Auto-complete any set that has weight + reps but wasn't explicitly ticked.
+    // Resolve placeholders into real values, then auto-complete any set that
+    // has reps but wasn't explicitly ticked. Empty rows are dropped entirely.
     const finalized = exercises.map(ex => ({
       ...ex,
       sets: ex.sets.map(s => {
-        if (s.done || !(parseInt(s.reps) > 0)) return s;
-        // Reps entered but not explicitly ticked off — mark done. Blank weight
-        // means bodyweight (abs/pullups/etc.); store as "0" so it's clear.
-        return { ...s, done: true, weight: s.weight === "" || s.weight == null ? "0" : s.weight };
-      }),
-    }));
+        const eff = effectiveSet(s, ex);
+        if (!(parseInt(eff.reps) > 0)) return s;
+        return { ...eff, done: true, weight: eff.weight === "" || eff.weight == null ? "0" : eff.weight };
+      }).filter(s => parseInt(s.reps) > 0),
+    })).filter(ex => ex.sets.length > 0);
     const pkg = {exercises: finalized, elapsed: finalElapsed, name: workoutName || "Workout", date: finalDate};
     // Detect any PR that mid-workout ✓ tapping didn't already fire (covers the
     // common case of typing weights and hitting Finish without checkboxes).
@@ -2215,12 +2283,14 @@ function WorkoutScreen({
     await finalizeAndPersist(pkg);
     // onFinish navigates away; keep saving=true so the button stays locked
   }
+  // Live workouts auto-save as a draft, so leaving is non-destructive.
+  function handleExit() { onCancel(); }
   function handleDiscard() {
-    if (isLive && done > 0) {
-      if (window.confirm("Discard this workout? Your logged sets will be lost.")) onCancel();
-    } else {
-      onCancel();
+    if (isLive && (done > 0 || hasData)) {
+      if (!window.confirm("Discard this workout? Everything you've logged will be deleted.")) return;
     }
+    if (onDiscardDraft) onDiscardDraft();
+    onCancel();
   }
 
   return (
@@ -2231,7 +2301,9 @@ function WorkoutScreen({
           <input value={workoutName} onChange={e=>setWorkoutName(e.target.value)} placeholder="Workout name" aria-label="Workout name"
             style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:MONO,background:"transparent",border:"none",outline:"none",padding:0,width:"100%"}}/>
           {isLive ? (
-            <div style={{color:C.muted,fontFamily:MONO,fontSize:11,marginTop:2}}>Today · tap name to rename</div>
+            <div style={{color:C.muted,fontFamily:MONO,fontSize:11,marginTop:2}}>
+              Today · <span style={{color:C.blue}}>draft auto-saves</span>
+            </div>
           ) : (
             <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4,flexWrap:"wrap"}}>
               <input type="date" value={date} max={isoDate()} onChange={e=>setDate(e.target.value)}
@@ -2247,9 +2319,13 @@ function WorkoutScreen({
             <button style={{background:"transparent",color:C.red,border:`1px solid ${C.red}55`,borderRadius:8,padding:"8px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO}}
               onClick={()=>{ if(window.confirm("Delete this workout? Cannot be undone.")) onDelete(); }}>Delete</button>
           )}
-          <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={handleDiscard}>{isLive?"Discard":"Cancel"}</button>
+          {isLive ? (
+            <button title="Leave — your draft is saved" style={{background:"transparent",color:C.blue,border:`1px solid ${C.blue}55`,borderRadius:8,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={handleExit}>Exit</button>
+          ) : (
+            <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={handleDiscard}>Cancel</button>
+          )}
           <button style={{background:C.accent,color:"#000",border:"none",borderRadius:8,padding:"9px 18px",fontSize:12,fontWeight:700,cursor:(canSave&&!saving)?"pointer":"default",fontFamily:MONO,opacity:(canSave&&!saving)?1:0.4}}
-            disabled={!canSave||saving} onClick={handleSave}>{saving?"Saving...":(isLive?"Finish":"Save")}</button>
+            disabled={!canSave||saving} onClick={handleSave}>{saving?"Saving...":(isLive?"Lock it in":"Save")}</button>
         </div>
       </div>
       <div style={{display:"flex",justifyContent:"space-around",padding:"10px 0",borderBottom:`1px solid ${C.border}`,background:"#0d0d0d"}}>
@@ -2267,78 +2343,95 @@ function WorkoutScreen({
         )}
         {exercises.map((item,ei)=>{
           const exName=mergedNames[item.exId]||item.exId; const meta=mergedMeta[item.exId];
+          const bwMode = !!item.bw;
           const exVol=item.sets.filter(s=>s.done).reduce((a,s)=>a+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0);
           // Session bests — count ONLY done sets so the green-check feedback
           // (a PR was hit) aligns with when the popup is supposed to fire.
-          const bestRM=item.sets.filter(s=>s.done).reduce((b,s)=>Math.max(b,e1RM(parseFloat(s.weight),parseInt(s.reps))),0);
-          const bestBwReps=item.sets.filter(s=>s.done).reduce((b,s)=>Math.max(b, isBwSet(s) ? parseInt(s.reps) : 0),0);
+          const bestWeight=item.sets.filter(s=>s.done).reduce((b,s)=>{const m=setMetric(s,bwMode);return m.kind==="weight"?Math.max(b,m.value):b;},0);
+          const bestBwReps=item.sets.filter(s=>s.done).reduce((b,s)=>{const m=setMetric(s,bwMode);return m.kind==="bw"?Math.max(b,m.value):b;},0);
           // Prior PR pulled from history (mutates as PRs land mid-session).
-          const prior = prevBestsRef.current?.[item.exId] || { e1rm: 0, bwReps: 0 };
-          const priorE1rm = prior.e1rm || 0;
-          const priorBwReps = prior.bwReps || 0;
-          const beatE1rm = priorE1rm > 0 && bestRM > priorE1rm;
-          const beatBw   = priorBwReps > 0 && bestBwReps > priorBwReps;
+          const prior = prevBestsRef.current?.[item.exId] || { maxWeight: 0, bwReps: 0 };
+          const priorWeight  = prior.maxWeight || 0;
+          const priorBwReps  = prior.bwReps || 0;
+          const beatWeight = priorWeight > 0 && bestWeight > priorWeight;
+          const beatBw     = priorBwReps > 0 && bestBwReps > priorBwReps;
           const lastRef=lastByExercise[item.exId];
+          // Which PR chip matters for how this exercise is currently being logged.
+          const showPR = bwMode
+            ? (priorBwReps > 0 ? { label: `PR ${priorBwReps} reps`, beat: beatBw } : null)
+            : (priorWeight  > 0 ? { label: `PR ${priorWeight} lbs`, beat: beatWeight } : null);
+          function toggleBw() {
+            setExercises(exercises.map((ex,j)=> j!==ei ? ex : {
+              ...ex, bw: !bwMode,
+              // Switching to BW clears weights so nothing stale lingers.
+              sets: !bwMode ? ex.sets.map(s=>({...s, weight:""})) : ex.sets,
+            }));
+          }
           return(
             <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                <div>
+                <div style={{minWidth:0}}>
                   <div style={{fontSize:14,fontWeight:600,color:C.text,fontFamily:MONO,marginBottom:2}}>{exName}</div>
                   <div style={{fontSize:11,color:"#7a7a7a",fontFamily:MONO}}>{meta?.muscle} · {meta?.cat}</div>
-                  {lastRef && <div style={{fontSize:10,color:C.accent,fontFamily:MONO,marginTop:3,opacity:0.85}}>last: {parseFloat(lastRef.weight)===0 ? "BW" : `${lastRef.weight} lbs`} × {lastRef.reps}</div>}
+                  {lastRef && <div style={{fontSize:10,color:C.accent,fontFamily:MONO,marginTop:3,opacity:0.85}}>last: {isBwSet(lastRef) ? "BW" : `${lastRef.weight} lbs`} × {lastRef.reps}</div>}
                 </div>
                 <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
-                  {exVol>0&&<span style={{fontSize:10,color:C.accent,background:"rgba(255,107,53,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{(exVol/1000).toFixed(1)}k</span>}
-                  {/* Prior PR to beat — the actual number the popup compares against. */}
-                  {priorE1rm > 0 && (
-                    <span style={{fontSize:10,color:beatE1rm?"#22ee66":C.purple,background:beatE1rm?"rgba(34,238,102,0.15)":"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO,fontWeight:beatE1rm?700:400}}>PR {priorE1rm}{beatE1rm?" ✓":""}</span>
+                  {!bwMode && exVol>0 && <span style={{fontSize:10,color:C.accent,background:"rgba(255,107,53,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{(exVol/1000).toFixed(1)}k</span>}
+                  {/* Prior PR to beat — the exact number the popup compares against. */}
+                  {showPR && (
+                    <span style={{fontSize:10,color:showPR.beat?"#22ee66":C.purple,background:showPR.beat?"rgba(34,238,102,0.15)":"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO,fontWeight:showPR.beat?700:400,whiteSpace:"nowrap"}}>{showPR.label}{showPR.beat?" ✓":""}</span>
                   )}
-                  {priorBwReps > 0 && (
-                    <span style={{fontSize:10,color:beatBw?"#22ee66":C.purple,background:beatBw?"rgba(34,238,102,0.15)":"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO,fontWeight:beatBw?700:400}}>PR {priorBwReps}r{beatBw?" ✓":""}</span>
-                  )}
-                  {/* Current session best — only show when there's no prior PR yet (first PR coming). */}
-                  {priorE1rm === 0 && priorBwReps === 0 && bestRM>0 && (
-                    <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>{bestRM}</span>
-                  )}
-                  {priorE1rm === 0 && priorBwReps === 0 && bestRM===0 && bestBwReps>0 && (
-                    <span style={{fontSize:10,color:C.purple,background:"rgba(167,139,250,0.1)",padding:"2px 7px",borderRadius:6,fontFamily:MONO}}>BW × {bestBwReps}</span>
-                  )}
+                  {/* Bodyweight toggle — hides the weight field entirely for reps-only work. */}
+                  <button onClick={toggleBw} title={bwMode?"Switch to weighted (track lbs)":"Switch to bodyweight (reps only)"}
+                    style={{background:bwMode?C.purple+"22":"transparent",border:`1px solid ${bwMode?C.purple:C.border2}`,borderRadius:6,color:bwMode?C.purple:C.muted,fontSize:9,fontFamily:MONO,padding:"3px 8px",cursor:"pointer",letterSpacing:"0.06em",fontWeight:700,whiteSpace:"nowrap"}}>
+                    {bwMode ? "BODYWEIGHT" : "+ WEIGHT"}
+                  </button>
                   <button title="Remove exercise" style={{background:"transparent",border:"none",color:"#7a7a7a",fontSize:14,cursor:"pointer",fontFamily:MONO,width:32,height:32,flexShrink:0}} onClick={()=>setExercises(exercises.filter((_,j)=>j!==ei))}>✕</button>
                 </div>
               </div>
               {item.sets.map((s,si)=>{
-                const rm = e1RM(parseFloat(s.weight),parseInt(s.reps));
-                const bwReps = isBwSet(s) ? parseInt(s.reps) : 0;
+                // What this row will actually log — blanks fall back to the
+                // greyed placeholder (last session's numbers), which is what
+                // the user sees, so ✓ records exactly that.
+                const eff = effectiveSet(s, item);
+                const effReps = parseInt(eff.reps) || 0;
+                const effWeight = parseFloat(eff.weight);
+                const hasEff = effReps > 0;
                 const rowEmpty = !s.weight && !s.reps;
-                // Most recent completed set above this one in the same exercise
-                let lastCompletedAbove = null;
+                // Most recent filled set above this one in the same exercise
+                // (reps alone is enough — bodyweight rows have no weight).
+                let lastAbove = null;
                 for (let k = si-1; k >= 0; k--) {
                   const ks = item.sets[k];
-                  if (ks.done && ks.weight && ks.reps) { lastCompletedAbove = ks; break; }
+                  if (parseInt(ks.reps) > 0) { lastAbove = ks; break; }
                 }
-                const showCopy = rowEmpty && !s.done && lastCompletedAbove;
+                const showCopy = rowEmpty && !s.done && lastAbove;
+                const dupLabel = bwMode ? `BW × ${eff.reps}` : `${effWeight||0} × ${eff.reps}`;
                 return (
                 <div key={s.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
                   <span style={{width:18,textAlign:"center",fontSize:12,color:"#777",fontFamily:MONO}}>{si+1}</span>
-                  <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="decimal" placeholder={lastRef?lastRef.weight:"lbs"} value={s.weight} onChange={e=>{const sets=[...item.sets];sets[si]={...s,weight:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
+                  {bwMode ? (
+                    <span style={{flex:1,minWidth:0,background:"#141414",border:`1px dashed ${C.purple}55`,borderRadius:8,color:C.purple,padding:"11px 8px",fontSize:12,fontFamily:MONO,textAlign:"center",letterSpacing:"0.08em",fontWeight:700}}>BW</span>
+                  ) : (
+                    <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="decimal" placeholder={lastRef?lastRef.weight:"lbs"} value={s.weight} onChange={e=>{const sets=[...item.sets];sets[si]={...s,weight:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
+                  )}
                   <span style={{color:C.dim,fontSize:12}}>×</span>
                   <input style={{flex:1,minWidth:0,background:"#1a1a1a",border:`1px solid ${C.border2}`,borderRadius:8,color:C.text,padding:"11px 8px",fontSize:15,fontFamily:MONO,textAlign:"center",outline:"none",WebkitAppearance:"none"}} type="number" inputMode="numeric" placeholder={lastRef?lastRef.reps:"reps"} value={s.reps} onChange={e=>{const sets=[...item.sets];sets[si]={...s,reps:e.target.value};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}/>
                   {/* middle slot: copy-from-above (when row is empty) OR
-                      duplicate-this-set-below (when row has data). Always-visible
-                      so duplicating a set is one tap. */}
+                      duplicate-this-set-below (when the row will log something).
+                      Works for reps-only bodyweight rows too. */}
                   {showCopy ? (
-                    <button aria-label="Copy weight and reps from last completed set" title="Copy last set"
-                      onClick={()=>{const sets=[...item.sets];sets[si]={...s,weight:lastCompletedAbove.weight,reps:lastCompletedAbove.reps};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}
+                    <button aria-label="Copy from the set above" title="Copy the set above"
+                      onClick={()=>{const sets=[...item.sets];sets[si]={...s,weight:bwMode?"":lastAbove.weight,reps:lastAbove.reps};setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));}}
                       style={{width:40,height:36,flexShrink:0,background:"transparent",border:`1px solid ${C.border2}`,borderRadius:7,color:C.sub,fontSize:9,fontFamily:MONO,cursor:"pointer",letterSpacing:"0.02em",lineHeight:1.1}}>⧉ copy</button>
-                  ) : (s.weight && s.reps) ? (
-                    <button aria-label="Duplicate this set below" title="Duplicate this set"
+                  ) : hasEff ? (
+                    <button aria-label="Duplicate this set below" title={`Duplicate · ${dupLabel}`}
                       onClick={()=>{
-                        const newSet = { id: uid(), weight: s.weight, reps: s.reps, done: false };
+                        const newSet = { id: uid(), weight: bwMode ? "" : eff.weight, reps: eff.reps, done: false };
                         const sets = [...item.sets.slice(0, si+1), newSet, ...item.sets.slice(si+1)];
                         setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
                       }}
-                      style={{width:40,height:36,flexShrink:0,background:`${C.accent}15`,border:`1px solid ${C.accent}80`,borderRadius:7,color:C.accent,fontSize:14,fontFamily:MONO,cursor:"pointer",lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}}
-                      title={rm>0?`Dup · ${rm} e1RM`:bwReps>0?`Dup · BW × ${bwReps}`:"Duplicate set"}>⧉</button>
+                      style={{width:40,height:36,flexShrink:0,background:`${C.accent}15`,border:`1px solid ${C.accent}80`,borderRadius:7,color:C.accent,fontSize:14,fontFamily:MONO,cursor:"pointer",lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}}>⧉</button>
                   ) : (
                     <span style={{width:40,flexShrink:0}}/>
                   )}
@@ -2346,37 +2439,35 @@ function WorkoutScreen({
                   <button aria-label="Mark set complete" style={{width:44,height:44,flexShrink:0,background:"transparent",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}} onClick={()=>{
                     const newDone = !s.done;
                     if (newDone) { try { if (navigator.vibrate) navigator.vibrate(15); } catch {} }
-                    // Always-on positive feedback: brief "✓ SET" overlay on
-                    // every checkmark with valid data (regardless of PR status).
-                    if (newDone && parseInt(s.reps) > 0) {
-                      const isBwHere = parseFloat(s.weight) === 0 || s.weight === "" || s.weight == null;
-                      setSetFlash({ ts: Date.now(), label: isBwHere ? `BW × ${s.reps}` : `${s.weight} × ${s.reps}` });
+                    // Commit the effective values so a row logged straight from
+                    // the placeholder records the real numbers, not a blank.
+                    const committed = newDone ? { ...s, ...eff, done: true } : { ...s, done: false };
+                    if (newDone && effReps > 0) {
+                      setSetFlash({ ts: Date.now(), label: bwMode || isBwSet(committed) ? `BW × ${committed.reps}` : `${committed.weight} × ${committed.reps}` });
                     }
-                    // PR detection: only on transition to done, for non-cardio, in non-edit mode.
-                    // Weighted sets compare e1RM; bodyweight sets (weight=0) compare REPS.
+                    // PR fires the moment you tick the box. Weighted → heaviest
+                    // lbs; bodyweight → most reps in a set.
                     if (newDone && mode !== "edit" && mergedMeta[item.exId]?.cat !== "Cardio" && !prTriggeredRef.current.has(s.id)) {
-                      const m = setMetric(s);
+                      const m = setMetric(committed, bwMode);
                       if (m.kind) {
-                        const prev = prevBestsRef.current[item.exId] || { e1rm: 0, bwReps: 0 };
+                        const prev = prevBestsRef.current[item.exId] || { maxWeight: 0, bwReps: 0 };
                         let isPR = false, prevVal = 0;
-                        if (m.kind === "weight" && m.value > prev.e1rm)   { isPR = true; prevVal = prev.e1rm;   prev.e1rm   = m.value; }
-                        if (m.kind === "bw"     && m.value > prev.bwReps) { isPR = true; prevVal = prev.bwReps; prev.bwReps = m.value; }
+                        if (m.kind === "weight" && m.value > prev.maxWeight) { isPR = true; prevVal = prev.maxWeight; prev.maxWeight = m.value; }
+                        if (m.kind === "bw"     && m.value > prev.bwReps)    { isPR = true; prevVal = prev.bwReps;    prev.bwReps    = m.value; }
                         if (isPR) {
                           prTriggeredRef.current.add(s.id);
                           prevBestsRef.current[item.exId] = prev;
-                          setActivePR({ exId: item.exId, exName: mergedNames[item.exId] || item.exId, kind: m.kind, value: m.value, prev: prevVal, weight: s.weight, reps: s.reps });
+                          setActivePR({ exId: item.exId, exName: mergedNames[item.exId] || item.exId, kind: m.kind, value: m.value, prev: prevVal, weight: committed.weight, reps: committed.reps });
                         }
                       }
                     }
-                    const sets=[...item.sets];sets[si]={...s,done:newDone};
-                    // Auto-fill ALL subsequent empty sets in this exercise with
-                    // this set's weight + reps. So 4 same-as-last sets = type
-                    // set 1, tap ✓, then ✓ ✓ ✓ on the now-pre-filled remaining
-                    // rows. (Skips rows the user has already typed into.)
-                    if (newDone && s.weight && s.reps) {
+                    const sets=[...item.sets];sets[si]=committed;
+                    // Auto-fill ALL subsequent empty sets with this set's values
+                    // so N identical sets = type once, then just tap ✓ down the list.
+                    if (newDone && effReps > 0) {
                       for (let j = si+1; j < sets.length; j++) {
                         if (!sets[j].weight && !sets[j].reps && !sets[j].done) {
-                          sets[j] = { ...sets[j], weight: s.weight, reps: s.reps };
+                          sets[j] = { ...sets[j], weight: bwMode ? "" : committed.weight, reps: committed.reps };
                         }
                       }
                     }
@@ -2392,24 +2483,40 @@ function WorkoutScreen({
                 );
               })}
               {(() => {
-                // "+ Add Set" pre-fills weight + reps from the most recent
-                // completed set in this exercise (or the last filled set if none
-                // are checked off yet) so logging same-as-last is one tap.
-                const lastDone = [...item.sets].reverse().find(x => x.done && x.weight && x.reps);
-                const lastFilled = lastDone || [...item.sets].reverse().find(x => x.weight && x.reps);
-                const tpl = lastFilled ? { weight: lastFilled.weight, reps: lastFilled.reps } : { weight: "", reps: "" };
+                // "+ Add set" pre-fills from the most recent filled set (reps
+                // alone is enough, so bodyweight works). "+5" stamps five at once.
+                const lastDone = [...item.sets].reverse().find(x => x.done && parseInt(x.reps) > 0);
+                const lastFilled = lastDone || [...item.sets].reverse().find(x => parseInt(x.reps) > 0);
+                const tpl = lastFilled
+                  ? { weight: bwMode ? "" : (lastFilled.weight ?? ""), reps: lastFilled.reps }
+                  : { weight: "", reps: "" };
                 const label = lastFilled
-                  ? `+ Add set · ${parseFloat(lastFilled.weight)===0?"BW":`${lastFilled.weight} lbs`} × ${lastFilled.reps}`
-                  : "+ Add Set";
+                  ? `+ Add set · ${bwMode || isBwSet(lastFilled) ? "BW" : `${lastFilled.weight} lbs`} × ${lastFilled.reps}`
+                  : "+ Add set";
+                function addSets(n) {
+                  const extra = Array.from({length:n},()=>({id:uid(),...tpl,done:false}));
+                  const sets=[...item.sets,...extra];
+                  setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex));
+                }
                 return (
-                  <button style={{width:"100%",background:"transparent",border:`1px dashed ${lastFilled?C.accent+"55":C.border}`,borderRadius:8,color:lastFilled?C.accent:C.dim,padding:"8px",fontSize:11,cursor:"pointer",marginTop:4,fontFamily:MONO,letterSpacing:"0.02em"}}
-                    onClick={()=>{ const sets=[...item.sets,{id:uid(),...tpl,done:false}]; setExercises(exercises.map((ex,j)=>j===ei?{...ex,sets}:ex)); }}>{label}</button>
+                  <div style={{display:"flex",gap:6,marginTop:4}}>
+                    <button style={{flex:1,background:"transparent",border:`1px dashed ${lastFilled?C.accent+"55":C.border}`,borderRadius:8,color:lastFilled?C.accent:C.dim,padding:"8px",fontSize:11,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.02em"}}
+                      onClick={()=>addSets(1)}>{label}</button>
+                    {lastFilled && (
+                      <button title="Add five identical sets" style={{flexShrink:0,background:"transparent",border:`1px dashed ${C.accent}55`,borderRadius:8,color:C.accent,padding:"8px 12px",fontSize:11,cursor:"pointer",fontFamily:MONO,fontWeight:700}}
+                        onClick={()=>addSets(5)}>+5</button>
+                    )}
+                  </div>
                 );
               })()}
             </div>
           );
         })}
         <button style={{width:"100%",background:"transparent",border:`1px solid ${C.border}`,borderRadius:12,color:C.muted,padding:14,fontSize:13,cursor:"pointer",marginTop:4,fontFamily:MONO}} onClick={()=>setShowPicker(true)}>+ Add Exercise</button>
+        {isLive && (
+          <button style={{width:"100%",background:"transparent",border:"none",color:C.red,padding:"16px 14px 4px",fontSize:11,cursor:"pointer",fontFamily:MONO,opacity:0.75}}
+            onClick={handleDiscard}>Discard this workout</button>
+        )}
       </div>
       {showPicker&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:100,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
@@ -2449,7 +2556,7 @@ function WorkoutScreen({
                       onClick={()=>{
                         if (!newExName.trim() || !onAddCustom) return;
                         const newId = onAddCustom(newExName, newExMuscle, newExCat);
-                        setExercises([...exercises,{id:uid(),exId:newId,sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}]);
+                        setExercises([...exercises,{id:uid(),exId:newId,bw:newExCat==="Abs"||newExCat==="PT",sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}]);
                         setNewExName(""); setCreatingCustom(false); setShowPicker(false);
                       }}>Create + Add</button>
                     <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:MONO}} onClick={()=>{setCreatingCustom(false);setNewExName("");}}>Cancel</button>
@@ -2463,7 +2570,7 @@ function WorkoutScreen({
                 const isCustom = !!customExercises[id];
                 return (
                   <button key={id} style={{width:"100%",background:"transparent",border:`1px solid ${isCustom?C.purple+"55":C.border}`,borderRadius:10,color:C.text,padding:"11px 14px",marginBottom:6,cursor:"pointer",textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}
-                    onClick={()=>{setExercises([...exercises,{id:uid(),exId:id,sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}]);setShowPicker(false);}}>
+                    onClick={()=>{setExercises([...exercises,{id:uid(),exId:id,bw:defaultBwFor(id),sets:[{id:uid(),weight:"",reps:"",done:false}],notes:""}]);setShowPicker(false);}}>
                     <span style={{fontSize:13,fontFamily:MONO,color:C.text}}>
                       {name}
                       {isCustom && <span style={{fontSize:9,color:C.purple,marginLeft:6,letterSpacing:"0.05em"}}>CUSTOM</span>}
@@ -2536,10 +2643,12 @@ function PRCelebration({ pr, onClose }) {
         <div style={{fontSize:10,letterSpacing:"0.3em",color:C.accent,fontFamily:MONO,fontWeight:700,marginBottom:8}}>NEW PERSONAL RECORD</div>
         <div style={{fontSize:18,fontWeight:700,color:C.text,fontFamily:MONO,marginBottom:24}}>{pr.exName}</div>
         <div style={{fontSize:64,fontWeight:900,color:C.accent,fontFamily:MONO,lineHeight:1,textShadow:"0 0 32px rgba(255,107,53,0.6)",marginBottom:6}}>{pr.kind==="bw" ? pr.value : (pr.value ?? pr.rm)}</div>
-        <div style={{fontSize:9,letterSpacing:"0.25em",color:C.muted,fontFamily:MONO,marginBottom:18}}>{pr.kind==="bw" ? "REPS · BODYWEIGHT" : "EST 1RM · LBS"}</div>
+        <div style={{fontSize:9,letterSpacing:"0.25em",color:C.muted,fontFamily:MONO,marginBottom:18}}>{pr.kind==="bw" ? "REPS IN A SET" : "LBS"}</div>
         <div style={{fontSize:12,color:C.muted,fontFamily:MONO,marginBottom:24}}>
-          {pr.kind==="bw" ? <>BW × {pr.reps} reps</> : <>{pr.weight} lbs × {pr.reps} reps</>}
-          {pr.prev > 0 ? <span style={{color:C.dim}}> · up from {pr.prev}</span> : <span style={{color:C.dim}}> · first PR</span>}
+          {pr.kind==="bw" ? <>bodyweight × {pr.reps} reps</> : <>{pr.weight} lbs × {pr.reps} reps</>}
+          {pr.prev > 0
+            ? <span style={{color:C.dim}}> · up from {pr.prev}{pr.kind==="bw"?" reps":" lbs"}</span>
+            : <span style={{color:C.dim}}> · first PR</span>}
         </div>
         <button onClick={onClose} style={{background:C.accent,border:"none",borderRadius:10,color:"#000",padding:"14px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:MONO,letterSpacing:"0.05em"}}>Keep Going →</button>
       </div>
@@ -2740,28 +2849,28 @@ function computeObservations({ history, dietLog, activeLog, focusSessions, goals
   const redDays = thisWeekDays.filter(d => dietLog[d]==="red").length;
   if (redDays > G.dietRed) obs.push(`Cheat days over cap: ${redDays} (max ${G.dietRed}).`);
 
-  // PR check on latest workout — weighted PRs by e1RM, bodyweight PRs by reps.
+  // PR check on latest workout — weighted PRs by heaviest lbs, bodyweight by reps.
   const latest = history[0];
   if (latest) {
     const priors = bestByExercise(history.slice(1), latest.id);
     for (const ex of latest.exercises) {
       const meta = EX_META[ex.exId];
       if (meta?.cat === "Cardio") continue;
-      let bestE1 = 0, bestBW = 0;
+      let bestW = 0, bestBW = 0;
       for (const s of ex.sets) {
         if (!s.done) continue;
         const m = setMetric(s);
-        if (m.kind === "weight" && m.value > bestE1) bestE1 = m.value;
+        if (m.kind === "weight" && m.value > bestW)  bestW  = m.value;
         if (m.kind === "bw"     && m.value > bestBW) bestBW = m.value;
       }
-      const prev = priors[ex.exId] || { e1rm: 0, bwReps: 0 };
+      const prev = priors[ex.exId] || { maxWeight: 0, bwReps: 0 };
       const name = EXERCISES[ex.exId] || ex.exId;
-      if (bestE1 > 0 && bestE1 > prev.e1rm) {
-        obs.push(`New PR on ${isoDate(new Date(latest.date))}: ${name} ${bestE1} e1RM (prev ${prev.e1rm || "none"}).`);
+      if (bestW > 0 && bestW > prev.maxWeight) {
+        obs.push(`New PR on ${isoDate(new Date(latest.date))}: ${name} ${bestW} lbs (prev ${prev.maxWeight || "none"}).`);
         break;
       }
       if (bestBW > 0 && bestBW > prev.bwReps) {
-        obs.push(`New BW PR on ${isoDate(new Date(latest.date))}: ${name} BW × ${bestBW} reps (prev ${prev.bwReps || "none"}).`);
+        obs.push(`New bodyweight PR on ${isoDate(new Date(latest.date))}: ${name} ${bestBW} reps (prev ${prev.bwReps || "none"}).`);
         break;
       }
     }
@@ -3607,6 +3716,23 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showPerfectDay, setShowPerfectDay] = useState(false);
   const [previewPR, setPreviewPR] = useState(null);
+
+  // ── In-progress workout draft ─────────────────────────────────────────────
+  // Lives in localStorage (device-local by nature — you're mid-session on one
+  // device). Nothing reaches your workout history until you tap "Lock it in".
+  const DRAFT_KEY = "iron_workout_draft";
+  const [workoutDraft, setWorkoutDraft] = useState(() => {
+    try { const raw = localStorage.getItem(DRAFT_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
+  });
+  function saveWorkoutDraft(d) {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch {}
+    setWorkoutDraft(d);
+  }
+  function clearWorkoutDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch {}
+    setWorkoutDraft(null);
+  }
+
   async function hardRefresh() {
     setRefreshing(true);
     try {
@@ -3916,6 +4042,12 @@ export default function App() {
   }
 
   function startWorkout(exercises, name="Quick Workout"){ setWkInit({exercises,name}); setScreen("workout"); }
+  // Resume the in-progress draft exactly where it was left off.
+  function resumeDraft(){
+    if (!workoutDraft) return;
+    setWkInit({ exercises: [], name: workoutDraft.name || "Workout", blocks: workoutDraft.exercises, startedAt: workoutDraft.startedAt });
+    setScreen("workout");
+  }
   async function finishWorkout(wk){
     const saved = await workoutsState.add(wk);
     setCompletedWk(saved || wk);
@@ -3950,23 +4082,75 @@ export default function App() {
     setEditingWk(null); setScreen("home");
   }
 
-  if(screen==="workout"&&wkInit) return <WorkoutScreen mode="live" initExercises={wkInit.exercises} workoutName={wkInit.name} customExercises={customExercises} onAddCustom={addCustomExercise} history={history} onFinish={finishWorkout} onCancel={()=>setScreen("home")}/>;
-  if(screen==="backfill"&&wkInit) return <WorkoutScreen mode="backfill" initExercises={wkInit.exercises} workoutName={wkInit.name} initialDate={wkInit.date} customExercises={customExercises} onAddCustom={addCustomExercise} history={history} onFinish={saveBackfill} onCancel={()=>setScreen("home")}/>;
-  if(screen==="edit"&&editingWk) return <WorkoutScreen
-    mode="edit"
-    initExercises={[]}
-    initialBlocks={editingWk.workout.exercises}
-    initialDate={editingWk.workout.date.slice(0,10)}
-    initialElapsedSec={editingWk.workout.elapsed}
-    workoutName={editingWk.workout.name}
-    customExercises={customExercises}
-    onAddCustom={addCustomExercise}
-    history={history}
-    excludeWorkoutId={editingWk.workout.id}
-    onFinish={saveEdit}
-    onCancel={()=>{setEditingWk(null);setScreen("home");}}
-    onDelete={deleteWorkout}
-  />;
+  // Rooney travels with you — rendered on the workout screens too, so you can
+  // ask a question mid-set without leaving the log.
+  const rooneyUI = (
+    <>
+      {!showRooney && (
+        <button onClick={()=>setShowRooney(true)} aria-label="Ask Rooney, your coach" title="Ask Rooney" style={{position:"fixed",bottom:78,right:16,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",zIndex:30,padding:0}}>
+          <span style={{width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#000",fontFamily:"monospace",boxShadow:"0 4px 20px rgba(255,107,53,0.35)"}}>R</span>
+          <span style={{fontSize:8,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",background:C.bg,padding:"1px 5px",borderRadius:6}}>ROONEY</span>
+        </button>
+      )}
+      {showRooney && (
+        <RooneyChat
+          history={history} dietLog={dietLog} activeLog={activeLog}
+          focusSessions={focusSessions} boards={boards}
+          memories={memoriesState.data}
+          goals={goalList}
+          zone2Log={zone2Log}
+          goalLogs={goalLogs}
+          customExercises={customExercises}
+          persistedMessages={convoState.messages}
+          onSaveConversation={convoState.save}
+          onClearConversation={convoState.clear}
+          onLogWorkout={rooneyLogWorkout}
+          onBuildWorkout={rooneyBuildWorkout}
+          onLogDiet={rooneyLogDiet}
+          onLogActivity={rooneyLogActivity}
+          onAddCard={rooneyAddCard}
+          onRemember={rooneyRemember}
+          onForget={rooneyForget}
+          onDeleteMemory={(id)=>memoriesState.remove(id)}
+          onClose={()=>setShowRooney(false)}
+        />
+      )}
+    </>
+  );
+
+  if(screen==="workout"&&wkInit) return <>
+    <WorkoutScreen mode="live"
+      initExercises={wkInit.exercises}
+      initialBlocks={wkInit.blocks || null}
+      draftStartedAt={wkInit.startedAt || null}
+      workoutName={wkInit.name}
+      customExercises={customExercises} onAddCustom={addCustomExercise} history={history}
+      onFinish={finishWorkout} onCancel={()=>setScreen("home")}
+      onSaveDraft={saveWorkoutDraft} onDiscardDraft={clearWorkoutDraft}/>
+    {rooneyUI}
+  </>;
+  if(screen==="backfill"&&wkInit) return <>
+    <WorkoutScreen mode="backfill" initExercises={wkInit.exercises} workoutName={wkInit.name} initialDate={wkInit.date} customExercises={customExercises} onAddCustom={addCustomExercise} history={history} onFinish={saveBackfill} onCancel={()=>setScreen("home")}/>
+    {rooneyUI}
+  </>;
+  if(screen==="edit"&&editingWk) return <>
+    <WorkoutScreen
+      mode="edit"
+      initExercises={[]}
+      initialBlocks={editingWk.workout.exercises}
+      initialDate={editingWk.workout.date.slice(0,10)}
+      initialElapsedSec={editingWk.workout.elapsed}
+      workoutName={editingWk.workout.name}
+      customExercises={customExercises}
+      onAddCustom={addCustomExercise}
+      history={history}
+      excludeWorkoutId={editingWk.workout.id}
+      onFinish={saveEdit}
+      onCancel={()=>{setEditingWk(null);setScreen("home");}}
+      onDelete={deleteWorkout}
+    />
+    {rooneyUI}
+  </>;
 
   if(screen==="summary"&&completedWk){
     const vol=completedWk.exercises.reduce((a,ex)=>a+ex.sets.reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);
@@ -4034,7 +4218,7 @@ export default function App() {
       <div style={{paddingBottom:80}}>
         {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateTask={updateTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
-          <IronTab  history={history} onStartWorkout={startWorkout}/>
+          <IronTab  history={history} onStartWorkout={startWorkout} draft={workoutDraft} onResumeDraft={resumeDraft} onDiscardDraft={clearWorkoutDraft}/>
           <LogTab   history={history} dietLog={dietLog} activeLog={activeLog} zone2Log={zone2Log} goals={goalList} goalLogs={goalLogs} bodyweight={bwState.data} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onAddZone2={(date,minutes,label)=>zone2State.add(date,minutes,label)} onRemoveZone2={(id)=>zone2State.remove(id)} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onSetBodyweight={bwState.setForDate} onStartBackfill={startBackfill} onOpenEdit={openEditWorkout}/>
         </>}
         {tab==="focus" && <FocusTab focusSessions={focusSessions} onAddSession={addSession} board={board} onAddTask={addTask} onToggleTask={toggleTask} onMoveTask={moveTask} onRemoveTask={removeTask} onReorder={reorderTasks} onUpdateTask={updateTask}/>}
@@ -4042,37 +4226,7 @@ export default function App() {
       </div>
 
       {/* Rooney floating button */}
-      {!showRooney && (
-        <button onClick={()=>setShowRooney(true)} aria-label="Ask Rooney, your coach" title="Ask Rooney" style={{position:"fixed",bottom:78,right:16,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",zIndex:30,padding:0}}>
-          <span style={{width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#000",fontFamily:"monospace",boxShadow:"0 4px 20px rgba(255,107,53,0.35)"}}>R</span>
-          <span style={{fontSize:8,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",background:C.bg,padding:"1px 5px",borderRadius:6}}>ROONEY</span>
-        </button>
-      )}
-
-      {/* Rooney overlay */}
-      {showRooney && (
-        <RooneyChat
-          history={history} dietLog={dietLog} activeLog={activeLog}
-          focusSessions={focusSessions} boards={boards}
-          memories={memoriesState.data}
-          goals={goalList}
-          zone2Log={zone2Log}
-          goalLogs={goalLogs}
-          customExercises={customExercises}
-          persistedMessages={convoState.messages}
-          onSaveConversation={convoState.save}
-          onClearConversation={convoState.clear}
-          onLogWorkout={rooneyLogWorkout}
-          onBuildWorkout={rooneyBuildWorkout}
-          onLogDiet={rooneyLogDiet}
-          onLogActivity={rooneyLogActivity}
-          onAddCard={rooneyAddCard}
-          onRemember={rooneyRemember}
-          onForget={rooneyForget}
-          onDeleteMemory={(id)=>memoriesState.remove(id)}
-          onClose={()=>setShowRooney(false)}
-        />
-      )}
+      {rooneyUI}
 
       {showGoalsEditor && (
         <GoalsEditor
@@ -4092,7 +4246,7 @@ export default function App() {
           onSignOut={auth.signOut}
           onClearAll={clearAll}
           onPreviewPerfectDay={()=>{ setShowSettings(false); previewPerfectDay(); }}
-          onPreviewPR={()=>{ setShowSettings(false); setPreviewPR({ exName: "Bench Press", kind: "weight", value: 165, prev: 152, weight: "135", reps: "6" }); }}
+          onPreviewPR={()=>{ setShowSettings(false); setPreviewPR({ exName: "Bench Press", kind: "weight", value: 185, prev: 175, weight: "185", reps: "5" }); }}
           onClose={()=>setShowSettings(false)}
         />
       )}
