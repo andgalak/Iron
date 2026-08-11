@@ -1124,8 +1124,9 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
           starts here immediately (never long-press-only). */}
       <span {...(dragHandleProps || {})} aria-label="Drag to reorder"
         style={{ flexShrink: 0, width: 20, alignSelf: "stretch", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: D.handle, cursor: "grab", lineHeight: 1, touchAction: "none", opacity: 0.55 }}>⠿</span>
-      {/* Checkbox — Today lane only, and never on recurring templates (they aren't "done-able") */}
-      {lane === "Today" && !card.recurrence && (
+      {/* Checkbox — every lane. Only recurring templates lack one, since a
+          standing commitment is never itself "done" (you tick its copy). */}
+      {!card.recurrence && (
         <button aria-label="Complete task" onPointerDown={e=>e.stopPropagation()} onClick={e=>{ e.stopPropagation(); if(!card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggle && onToggle(card.id); }}
           style={{ flexShrink: 0, width: 22, height: 22, padding: 0, background: "transparent", border: "none", cursor: "pointer" }}>
           <svg width="20" height="20" viewBox="0 0 24 24" style={{ display: "block" }}>
@@ -1736,7 +1737,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
               )}
 
               <div style={{display:"flex",gap:8,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
-                {menuCard.lane==="Today" && !card.recurrence && (
+                {!card.recurrence && (
                   <button onClick={()=>{onToggleTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:8,color:C.accent,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>{card.done?"Mark not done":"Complete"}</button>
                 )}
                 <button onClick={()=>{onRemoveTask(menuCard.id);setMenuCard(null);}} style={{flex:1,background:"transparent",border:`1px solid ${C.red}55`,borderRadius:8,color:C.red,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:MONO}}>Delete</button>
