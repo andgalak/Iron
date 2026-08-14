@@ -1064,6 +1064,21 @@ function effectiveTaskStatus(card, escalateAfterDays = 0) {
   }
   return "waiting";
 }
+// The date a card is really judged on: its own due date, or the soonest
+// unfinished subtask's, whichever lands first. A card whose step is late IS
+// late — burying that in a grey "2/3" counter hides the actual signal.
+// Returns { date, fromSubtask } or null.
+function effectiveDueDate(card) {
+  let best = card?.dueDate || null;
+  let fromSubtask = false;
+  for (const s of (card?.subtasks || [])) {
+    if (s.done || !s.due) continue;
+    if (!best || s.due < best) { best = s.due; fromSubtask = true; }
+  }
+  if (!best) return null;
+  return { date: best, fromSubtask };
+}
+
 // The single source of truth for a card's left border + metadata line.
 // Returns { color, label, dim } — label null means "render no metadata line".
 function taskUrgency(card, escalateAfterDays = 0) {
@@ -1086,13 +1101,16 @@ function taskUrgency(card, escalateAfterDays = 0) {
     const age = waited != null && waited > 0 ? ` · ${waited}d` : "";
     return { color: URGENCY.neutral, label: `waiting${who}${age}`, dim: true, rank: 4 };
   }
-  if (card.dueDate) {
-    if (card.dueDate < today) {
-      const late = daysBetween(card.dueDate, today);
-      return { color: URGENCY.overdue, label: `overdue ${late}d`, dim: false, rank: 1 };
+  const due = effectiveDueDate(card);
+  if (due) {
+    // Name the source when a subtask is what's driving it — tells you where to look.
+    const src = due.fromSubtask ? "subtask " : "";
+    if (due.date < today) {
+      const late = daysBetween(due.date, today);
+      return { color: URGENCY.overdue, label: `${src}overdue ${late}d`, dim: false, rank: 1 };
     }
-    if (card.dueDate === today) {
-      return { color: URGENCY.dueToday, label: "due today", dim: false, rank: 2 };
+    if (due.date === today) {
+      return { color: URGENCY.dueToday, label: `${src}due today`, dim: false, rank: 2 };
     }
   }
   return { color: URGENCY.neutral, label: null, dim: false, rank: 3 };
