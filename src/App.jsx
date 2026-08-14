@@ -4298,6 +4298,15 @@ export default function App() {
     const newInstances = templatesToSpawn.map(tpl => ({
       id: uid(), text: tpl.text, tags: tpl.tags || [], done: false,
       category: tpl.category || "work", sourceId: tpl.id,
+      // The whole point of "every Friday" is that it's due that Friday — without
+      // a date the copy lands in Today reading as having no deadline at all,
+      // and goes overdue-red on its own if it's still sitting there tomorrow.
+      dueDate: t,
+      // Carry the template's notes/subtasks so a recurring checklist is usable.
+      ...(tpl.notes ? { notes: tpl.notes } : {}),
+      ...((tpl.subtasks || []).length
+        ? { subtasks: tpl.subtasks.map(s => ({ id: uid(), text: s.text, done: false })) }
+        : {}),
     }));
 
     boardsState.setAll(bs => bs.map((b, i) => {
