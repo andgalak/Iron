@@ -4374,7 +4374,15 @@ export default function App() {
   // future-scheduled cards until their day arrives, and recurring TEMPLATES
   // (their spawned instances show instead).
   const todayTasks = (board?.cols?.find(c => c.name === "Today")?.cards || [])
-    .filter(k => !k.done && !k.recurrence && (!k.dueDate || k.dueDate <= todayISO));
+    .filter(k => {
+      if (k.done) return false;          // completed work lives on the board, not here
+      if (k.recurrence) return false;    // templates live in Keep in Mind; their copies show
+      // Future-dated cards stay hidden until their day — EXCEPT when they're
+      // waiting or blocked. Those are judged by their follow-up date, not their
+      // due date, so a future due date shouldn't make them vanish from Today.
+      if (taskStatusOf(k)) return true;
+      return !k.dueDate || k.dueDate <= todayISO;
+    });
   function updateBoard(mutator) { setBoards(bs => bs.map((b,i) => i===0 ? mutator(b) : b)); }
   function addTask(laneName, text, dueDate = null, category = "work") {
     if (!text.trim() || !board) return;
