@@ -1265,6 +1265,27 @@ function SortableTaskCard({ card, lane, onToggle, onOpenDetail, density, touchMo
   );
 }
 
+// Category headers double as drop targets: dropping a card on one re-files it.
+// This is the ONLY way a drag changes a card's category — card-to-card drops
+// are pure reordering, so normal rearranging can never silently re-file work.
+function CategoryDropHeader({ lane, category, dragging }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `cat::${lane}::${category}` });
+  const color = TASK_CATEGORY_COLOR[category];
+  return (
+    <div ref={setNodeRef} style={{
+      borderTop: `0.5px solid ${isOver ? color : "#262626"}`,
+      background: isOver ? color + "1f" : "transparent",
+      marginTop: 14, paddingTop: 9, paddingBottom: isOver ? 9 : 0, marginBottom: 6,
+      borderRadius: isOver ? 6 : 0, transition: "background 0.12s, padding 0.12s",
+    }}>
+      <span style={{ fontSize: 13, fontWeight: 700, color, fontFamily: MONO, letterSpacing: "0.1em", fontVariant: "small-caps", textTransform: "lowercase" }}>
+        {TASK_CATEGORY_LABEL[category]}
+      </span>
+      {dragging && <span style={{ fontSize: 10, color: C.dim, fontFamily: MONO, marginLeft: 8 }}>drop to re-file</span>}
+    </div>
+  );
+}
+
 // A lane is a droppable so cards can be dropped into it even when empty.
 // minHeight ensures dnd-kit's collision detection still has a real target
 // when the lane is empty — otherwise "Keep in Mind" (which often has no cards)
@@ -1411,6 +1432,7 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
     useSensor(TouchSensor, { activationConstraint: { distance: 5 } }),
   );
   function findLane(id) {
+    if (typeof id === "string" && id.startsWith("cat::")) return id.split("::")[1];
     if (LANES.includes(id)) return id;
     return LANES.find(lane => (laneItems[lane]||[]).includes(id));
   }
@@ -1435,12 +1457,15 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
     // Dropping onto a card in the other category section re-files this task.
     // Cards are grouped by category on render, so without this the card would
     // simply snap back to where it started and the drag would look broken.
-    if (onUpdateTask && !LANES.includes(over.id)) {
+    // Re-filing only happens on an explicit drop onto a category header.
+    // (This used to fire for any card-to-card drop, which meant simply
+    // reordering a personal card upward past the work group silently converted
+    // it to work — a destructive side effect of an ordinary drag.)
+    if (onUpdateTask && typeof over.id === "string" && over.id.startsWith("cat::")) {
+      const cat = over.id.split("::")[2];
       const dragged = cardById[active.id];
-      const target = cardById[over.id];
-      if (dragged && target && !isTaskTemplate(dragged)) {
-        const targetCat = taskCategoryOf(target);
-        if (taskCategoryOf(dragged) !== targetCat) onUpdateTask(active.id, { category: targetCat });
+      if (dragged && !isTaskTemplate(dragged) && taskCategoryOf(dragged) !== cat) {
+        onUpdateTask(active.id, { category: cat });
       }
     }
     let next = laneItems;
@@ -1620,6 +1645,15 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
             const cards = laneCards(lane);
             const rows = groupTasksForRender(cards, { escalateAfterDays });
             const sortedIds = rows.filter(r=>r.kind==="card").map(r=>r.card.id);
+            // While dragging, surface any category header this lane doesn't
+            // currently have, so an empty category is still a reachable target.
+            if (activeId) {
+              for (const cat of TASK_CATEGORIES) {
+                if (!rows.some(r => r.kind === "header" && r.category === cat)) {
+                  rows.push({ kind: "header", category: cat, key: "h-" + cat });
+                }
+              }
+            }
             // Blocked counts as actionable — it needs the user, urgently.
             const waitingCount = cards.filter(k => effectiveTaskStatus(k, escalateAfterDays) === "waiting").length;
             return (
@@ -1662,13 +1696,9 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                       🔁 REPEATING <span style={{color:C.dim,fontWeight:400,letterSpacing:"0.04em"}}>· auto-adds to Today</span>
                     </div>
                   ) : (
-                    // Category lives here and nowhere else: hairline rule above,
-                    // small-caps label in the category colour.
-                    <div key={row.key} style={{borderTop:`0.5px solid #262626`,marginTop:14,paddingTop:9,marginBottom:6}}>
-                      <span style={{fontSize:13,fontWeight:700,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.1em",fontVariant:"small-caps",textTransform:"lowercase"}}>
-                        {TASK_CATEGORY_LABEL[row.category]}
-                      </span>
-                    </div>
+                    // Category lives here and nowhere else — and doubles as the
+                    // drop target for re-filing a task.
+                    <CategoryDropHeader key={row.key} lane={lane} category={row.category} dragging={!!activeId} />
                   )
                 ) : (
                   <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask}
