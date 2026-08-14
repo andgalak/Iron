@@ -653,50 +653,37 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
         </div>
       </div>
 
-      {/* TODAY — Focus board "Today" lane as a checklist (synced to the board) */}
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:todayTasks.length||addingToday?12:0}}>
-          <div style={{fontSize:12,color:C.text,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>TODAY</div>
-          <button onClick={()=>{setAddingToday(true);}} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:14,cursor:"pointer",padding:"1px 9px",lineHeight:1.2}}>+</button>
-        </div>
-        {groupTasksForRender(todayTasks).map(row => row.kind === "header" ? (
-          <div key={row.key} style={{fontSize:9,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,marginTop:12,marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${TASK_CATEGORY_COLOR[row.category]}33`}}>
-            {TASK_CATEGORY_LABEL[row.category]}
-          </div>
-        ) : (() => {
-          const cat = taskCategoryOf(row.card);
-          const catColor = TASK_CATEGORY_COLOR[cat];
+      {/* TODAY — Focus board "Today" lane as a checklist (synced to the board).
+          Surface sits darker than the cards so the #141414 cards read as cards. */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        {(() => {
+          const esc = readEscalateAfterDays();
+          const waitingCount = todayTasks.filter(k => effectiveTaskStatus(k, esc) === "waiting").length;
           return (
-            <div key={row.key} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 0"}}>
-              <button aria-label="Complete task" onClick={()=>{ if(!row.card.done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleTask(row.card.id); }}
-                style={{flexShrink:0,width:26,height:26,padding:0,background:"transparent",border:"none",cursor:"pointer",marginTop:1}}>
-                <svg width="24" height="24" viewBox="0 0 24 24" style={{display:"block"}}>
-                  <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={row.card.done?C.accent:"transparent"} stroke={row.card.done?C.accent:C.muted} strokeWidth="2" style={{transition:row.card.done?"fill 0.15s ease-out, stroke 0.15s ease-out":"none"}}/>
-                  {row.card.done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{strokeDasharray:22,animation:"checkDraw 0.16s ease-out forwards"}}/>}
-                </svg>
-              </button>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,color:row.card.done?C.muted:C.text,fontFamily:MONO,lineHeight:1.5,paddingTop:3,textDecoration:row.card.done?"line-through":"none"}}>{row.card.text}</div>
-                {row.card.dueDate && row.card.dueDate < isoDate() && !row.card.done && (
-                  <div style={{fontSize:10,color:C.red,fontFamily:MONO,marginTop:3,letterSpacing:"0.03em"}}>📅 overdue from {row.card.dueDate}</div>
-                )}
-              </div>
-              {/* Tappable category chip — one tap flips work↔personal for this task. */}
-              {onUpdateTask ? (
-                <button
-                  onClick={()=>onUpdateTask(row.card.id, { category: cat === "work" ? "personal" : "work" })}
-                  title={`${TASK_CATEGORY_LABEL[cat]} — tap to change`}
-                  style={{flexShrink:0,alignSelf:"flex-start",background:catColor+"1a",border:`1px solid ${catColor}66`,borderRadius:6,color:catColor,padding:"3px 8px",fontSize:9,fontFamily:MONO,cursor:"pointer",letterSpacing:"0.06em",fontWeight:700,marginTop:5,lineHeight:1.4}}>
-                  {cat === "work" ? "WORK" : "PERS"}
-                </button>
-              ) : (
-                <span style={{flexShrink:0,alignSelf:"flex-start",background:catColor+"1a",border:`1px solid ${catColor}66`,borderRadius:6,color:catColor,padding:"3px 8px",fontSize:9,fontFamily:MONO,letterSpacing:"0.06em",fontWeight:700,marginTop:5,lineHeight:1.4}}>
-                  {cat === "work" ? "WORK" : "PERS"}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:todayTasks.length||addingToday?12:0}}>
+              <div style={{fontSize:12,color:BOARD_HEADER_GREY,fontFamily:MONO,letterSpacing:"0.12em",fontWeight:700}}>TODAY</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:10}}>
+                <span style={{fontSize:10,color:"#5a5a5a",fontFamily:MONO,whiteSpace:"nowrap"}}>
+                  {todayTasks.length - waitingCount} actionable{waitingCount>0?` · ${waitingCount} waiting`:""}
                 </span>
-              )}
+                <button onClick={()=>{setAddingToday(true);}} style={{background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.muted,fontSize:14,cursor:"pointer",padding:"1px 9px",lineHeight:1.2}}>+</button>
+              </div>
             </div>
           );
-        })())}
+        })()}
+        {/* Same card component as the Focus board so the two can't drift apart. */}
+        {groupTasksForRender(todayTasks, { escalateAfterDays: readEscalateAfterDays() }).map(row => row.kind === "header" ? (
+          row.template ? null : (
+            <div key={row.key} style={{borderTop:`0.5px solid #262626`,marginTop:14,paddingTop:9,marginBottom:6}}>
+              <span style={{fontSize:13,fontWeight:700,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.1em",fontVariant:"small-caps",textTransform:"lowercase"}}>
+                {TASK_CATEGORY_LABEL[row.category]}
+              </span>
+            </div>
+          )
+        ) : (
+          <TaskCardBody key={row.key} card={row.card} lane="Today" onToggle={onToggleTask}
+            density="comfortable" escalateAfterDays={readEscalateAfterDays()} showHandle={false} />
+        ))}
         {addingToday && (
           <div style={{marginTop:8}}>
             <input autoFocus value={newTodayText} onChange={e=>setNewTodayText(e.target.value)}
@@ -1027,6 +1014,10 @@ const URGENCY = {
   waiting:  "#8a8a8a",
 };
 const BOARD_HEADER_GREY = "#8a8a8a";
+// Shared so Home and the Focus board escalate waiting tasks identically.
+function readEscalateAfterDays() {
+  try { return parseInt(localStorage.getItem("iron_escalate_after_days")) || 0; } catch { return 0; }
+}
 const CARD_BG = "#141414";
 const SUBTASK_GREY = "#5a5a5a";
 
@@ -1183,7 +1174,7 @@ function taskDueLabel(iso) {
 }
 
 // The visual content of a task card (shared by the sortable card + drag overlay).
-function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging, density = "comfortable", escalateAfterDays = 0 }) {
+function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging, density = "comfortable", escalateAfterDays = 0, showHandle = true }) {
   const D = BOARD_DENSITY[density] || BOARD_DENSITY.comfortable;
   const subDone = (card.subtasks || []).filter(s => s.done).length;
   const subTotal = (card.subtasks || []).length;
@@ -1216,8 +1207,10 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging, density
     }}>
       {/* Drag handle — hidden until hover on pointer devices (pure noise across
           dozens of cards), always visible on touch where there is no hover. */}
-      <span {...(dragHandleProps || {})} aria-label="Drag to reorder" className="iron-grip"
-        style={{ flexShrink: 0, width: 16, alignSelf: "stretch", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: D.handle, cursor: "grab", lineHeight: 1, touchAction: "none" }}>⠿</span>
+      {showHandle && (
+        <span {...(dragHandleProps || {})} aria-label="Drag to reorder" className="iron-grip"
+          style={{ flexShrink: 0, width: 16, alignSelf: "stretch", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: D.handle, cursor: "grab", lineHeight: 1, touchAction: "none" }}>⠿</span>
+      )}
       {/* Checkbox — every lane. Only recurring templates lack one, since a
           standing commitment is never itself "done" (you tick its copy). */}
       {!card.recurrence && (
