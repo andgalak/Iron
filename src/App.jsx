@@ -4372,14 +4372,14 @@ export default function App() {
     const moveTo = new Map();
     strayIds.forEach(id => moveTo.set(id, "Keep in Mind"));
     for (const col of (board.cols || [])) {
-      const fromIdx = LANES.indexOf(col.name);
+      const fromIdx = TASK_LANES.indexOf(col.name);
       if (fromIdx < 0) continue;
       for (const k of (col.cards || [])) {
         if (strayIds.has(k.id)) continue;
         const target = lanePromotionTarget(k, t);
         if (!target) continue;
         // Only ever move LEFT — never demote something the user placed.
-        if (LANES.indexOf(target) >= fromIdx) continue;
+        if (TASK_LANES.indexOf(target) >= fromIdx) continue;
         moveTo.set(k.id, target);
       }
     }
