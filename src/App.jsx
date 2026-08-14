@@ -1099,7 +1099,9 @@ function taskUrgency(card, escalateAfterDays = 0) {
     const waited = daysBetween(card.waitingSince, today);
     const who = card.waitingOn ? ` on ${card.waitingOn}` : "";
     const age = waited != null && waited > 0 ? ` · ${waited}d` : "";
-    return { color: URGENCY.neutral, label: `waiting${who}${age}`, dim: true, rank: 4 };
+    // Border stays invisible, but the label must stay READABLE — it's the line
+    // that explains why the card is dimmed at all.
+    return { color: URGENCY.neutral, labelColor: URGENCY.waiting, label: `waiting${who}${age}`, dim: true, rank: 4 };
   }
   const due = effectiveDueDate(card);
   if (due) {
@@ -1191,7 +1193,7 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging, density
   const primaryLabel = isTpl
     ? `repeats ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][card.recurrence.weekday]}`
     : u.label;
-  const primaryColor = isTpl ? BOARD_HEADER_GREY : u.color;
+  const primaryColor = isTpl ? BOARD_HEADER_GREY : (u.labelColor || u.color);
   const hasMeta = !!primaryLabel || subTotal > 0 || !!card.notes;
 
   return (
@@ -1206,8 +1208,10 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging, density
       minHeight: D.minH, boxSizing: "border-box",
       display: "flex", alignItems: "center", gap: 8,
       boxShadow: dragging ? "0 8px 24px rgba(0,0,0,0.5)" : "none",
-      // Waiting recedes; blocked never dims.
-      opacity: u.dim ? 0.45 : 1,
+      // Waiting recedes; blocked never dims. 0.6 rather than the speced 0.45 —
+      // at 0.45 the status line was unreadable, and a card you can't read can't
+      // tell you why it's dimmed. Still clearly subordinate to active work.
+      opacity: u.dim ? 0.6 : 1,
       transition: "min-height 0.15s ease, padding 0.15s ease, opacity 0.15s ease",
     }}>
       {/* Drag handle — hidden until hover on pointer devices (pure noise across
@@ -1231,7 +1235,8 @@ function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging, density
         {hasMeta && (
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 7, marginTop: 3 }}>
             {primaryLabel && (
-              <span style={{ fontSize: 11, color: primaryColor, fontFamily: MONO, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>{primaryLabel}</span>
+              // Wraps: "waiting on <someone> to review my email" is a full sentence.
+              <span style={{ fontSize: 11, color: primaryColor, fontFamily: MONO, letterSpacing: "0.02em", lineHeight: 1.45, minWidth: 0, wordBreak: "break-word" }}>{primaryLabel}</span>
             )}
             {subTotal > 0 && (
               <span style={{ fontSize: 11, color: SUBTASK_GREY, fontFamily: MONO, whiteSpace: "nowrap" }}>{subDone}/{subTotal}</span>
