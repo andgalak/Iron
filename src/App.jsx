@@ -693,7 +693,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
               }}
               placeholder="Add a task for today…"
               style={{width:"100%",background:"#161616",border:`1px solid ${C.accent}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:MONO,outline:"none",boxSizing:"border-box"}}/>
-            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:5,letterSpacing:"0.03em"}}>To schedule for a future day, add it on the Focus tab.</div>
+            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:5,letterSpacing:"0.03em"}}>Everything in Today shows here. To plan something for later, put it in This Week on the Focus tab.</div>
           </div>
         )}
         {todayTasks.length===0 && !addingToday && (
@@ -4404,14 +4404,15 @@ export default function App() {
   // future-scheduled cards until their day arrives, and recurring TEMPLATES
   // (their spawned instances show instead).
   const todayTasks = (board?.cols?.find(c => c.name === "Today")?.cards || [])
+    // Home mirrors the Today lane. Putting a card there IS the statement that
+    // it's today's work, so the lane wins over any date on the card — a future
+    // due date used to hide it here, which meant tasks you'd deliberately
+    // placed in Today were invisible on the screen that's meant to show them.
+    // To defer something, move it to This Week; that's what the lane is for.
     .filter(k => {
-      if (k.done) return false;          // completed work lives on the board, not here
-      if (k.recurrence) return false;    // templates live in Keep in Mind; their copies show
-      // Future-dated cards stay hidden until their day — EXCEPT when they're
-      // waiting or blocked. Those are judged by their follow-up date, not their
-      // due date, so a future due date shouldn't make them vanish from Today.
-      if (taskStatusOf(k)) return true;
-      return !k.dueDate || k.dueDate <= todayISO;
+      if (k.done) return false;        // completed work lives on the board, not here
+      if (k.recurrence) return false;  // templates live in Keep in Mind; their copies show
+      return true;
     });
   function updateBoard(mutator) { setBoards(bs => bs.map((b,i) => i===0 ? mutator(b) : b)); }
   function addTask(laneName, text, dueDate = null, category = "work") {
