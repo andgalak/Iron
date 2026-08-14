@@ -1012,17 +1012,97 @@ const BOARD_DENSITY = {
 // category default to "personal".
 const TASK_CATEGORIES = ["work", "personal"];
 const TASK_CATEGORY_LABEL = { work: "WORK", personal: "PERSONAL" };
-const TASK_CATEGORY_COLOR = { work: C.accent, personal: C.blue };
+// Category owns ONE channel: the group header label. It never appears on a card
+// body — the header directly above already says it, and a per-card badge was
+// the loudest element carrying the least actionable information.
+const TASK_CATEGORY_COLOR = { work: "#7B6BFF", personal: "#3FB59A" };
+
+// Urgency owns the card's left border and the metadata line. These are the only
+// hot colors on the board, so "red" means exactly one thing: this is late.
+const URGENCY = {
+  overdue:  "#E24B4A",
+  dueToday: "#BA7517",
+  blocked:  "#e8e8e8",   // louder than overdue by design — needs escalation
+  neutral:  "#2a2a2a",   // effectively invisible
+  waiting:  "#8a8a8a",
+};
+const BOARD_HEADER_GREY = "#8a8a8a";
+const CARD_BG = "#141414";
+const SUBTASK_GREY = "#5a5a5a";
+
 function taskCategoryOf(card) {
   // Default any un-categorized card to WORK (higher-priority bucket by design).
   return card?.category === "personal" ? "personal" : "work";
+}
+
+// ── Actionability ───────────────────────────────────────────────────────────
+// Stored status is "waiting" | "blocked" | undefined. Legacy cards carried a
+// boolean `blocked` set by a combined "waiting / blocked" control — those read
+// as waiting, the softer of the two.
+function taskStatusOf(card) {
+  if (card?.status === "waiting" || card?.status === "blocked") return card.status;
+  if (card?.blocked) return "waiting";
+  return null;
+}
+function daysBetween(fromIso, toIso) {
+  if (!fromIso || !toIso) return null;
+  return Math.round((new Date(toIso + "T12:00:00") - new Date(fromIso + "T12:00:00")) / 86400000);
+}
+function addDaysIso(iso, n) {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + n);
+  return isoDate(d);
+}
+// A waiting task whose follow-up date has passed (plus a configurable grace
+// period) escalates to blocked on its own — an ignored wait is a stuck task.
+function effectiveTaskStatus(card, escalateAfterDays = 0) {
+  const s = taskStatusOf(card);
+  if (s !== "waiting") return s;
+  if (card.followUpDate) {
+    const escalateOn = addDaysIso(card.followUpDate, Math.max(0, escalateAfterDays));
+    if (isoDate() > escalateOn) return "blocked";
+  }
+  return "waiting";
+}
+// The single source of truth for a card's left border + metadata line.
+// Returns { color, label, dim } — label null means "render no metadata line".
+function taskUrgency(card, escalateAfterDays = 0) {
+  const today = isoDate();
+  // A finished task has no urgency left, whatever its date said.
+  if (card?.done) return { color: URGENCY.neutral, label: null, dim: false, rank: 5 };
+  const status = effectiveTaskStatus(card, escalateAfterDays);
+
+  if (status === "blocked") {
+    return { color: URGENCY.blocked, label: "blocked — needs escalation", dim: false, rank: 0 };
+  }
+  if (status === "waiting") {
+    // Waiting is exempt from overdue styling: the user isn't the blocker, and
+    // flagging it would desensitize them to genuinely late work.
+    if (card.followUpDate && card.followUpDate === today) {
+      return { color: URGENCY.dueToday, label: "follow up today", dim: false, rank: 2 };
+    }
+    const waited = daysBetween(card.waitingSince, today);
+    const who = card.waitingOn ? ` on ${card.waitingOn}` : "";
+    const age = waited != null && waited > 0 ? ` · ${waited}d` : "";
+    return { color: URGENCY.neutral, label: `waiting${who}${age}`, dim: true, rank: 4 };
+  }
+  if (card.dueDate) {
+    if (card.dueDate < today) {
+      const late = daysBetween(card.dueDate, today);
+      return { color: URGENCY.overdue, label: `overdue ${late}d`, dim: false, rank: 1 };
+    }
+    if (card.dueDate === today) {
+      return { color: URGENCY.dueToday, label: "due today", dim: false, rank: 2 };
+    }
+  }
+  return { color: URGENCY.neutral, label: null, dim: false, rank: 3 };
 }
 // Display order: work section first, then personal. Within each category,
 // active cards on top, done cards sink to the bottom. Stable — preserves manual
 // order (from drag) within each [category, done] group.
 function isTaskTemplate(card) { return card?.recurrence?.kind === "weekly"; }
 
-function sortTasksForDisplay(cards) {
+function sortTasksForDisplay(cards, escalateAfterDays = 0) {
   return [...cards].sort((a, b) => {
     // Recurring templates always sink below real tasks — they're standing
     // commitments, not work to do right now.
@@ -1032,13 +1112,19 @@ function sortTasksForDisplay(cards) {
     const ca = taskCategoryOf(a) === "work" ? 0 : 1;
     const cb = taskCategoryOf(b) === "work" ? 0 : 1;
     if (ca !== cb) return ca - cb;
-    return (a.done ? 1 : 0) - (b.done ? 1 : 0);
+    const da = a.done ? 1 : 0, db = b.done ? 1 : 0;
+    if (da !== db) return da - db;
+    // Within a group: blocked first (needs escalation), then overdue, due
+    // today, normal, and waiting last since it isn't the user's move.
+    return taskUrgency(a, escalateAfterDays).rank - taskUrgency(b, escalateAfterDays).rank;
   });
 }
 // Walk a sorted card list and emit inline "section headers": WORK / PERSONAL
 // dividers for real tasks, then a single REPEATING divider for templates.
-function groupTasksForRender(cards) {
-  const sorted = sortTasksForDisplay(cards);
+// `groupByCategory: false` yields a flat urgency-sorted list — the shape a
+// future global Work/Personal filter would want.
+function groupTasksForRender(cards, { escalateAfterDays = 0, groupByCategory = true } = {}) {
+  const sorted = sortTasksForDisplay(cards, escalateAfterDays);
   const out = [];
   let lastCat = null;
   let templateHeaderDone = false;
@@ -1051,10 +1137,12 @@ function groupTasksForRender(cards) {
       out.push({ kind: "card", card: c, key: "c-" + c.id });
       continue;
     }
-    const cat = taskCategoryOf(c);
-    if (cat !== lastCat) {
-      out.push({ kind: "header", category: cat, key: "h-" + cat });
-      lastCat = cat;
+    if (groupByCategory) {
+      const cat = taskCategoryOf(c);
+      if (cat !== lastCat) {
+        out.push({ kind: "header", category: cat, key: "h-" + cat });
+        lastCat = cat;
+      }
     }
     out.push({ kind: "card", card: c, key: "c-" + c.id });
   }
@@ -1075,55 +1163,39 @@ function taskDueLabel(iso) {
 }
 
 // The visual content of a task card (shared by the sortable card + drag overlay).
-function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps, dragging, density = "comfortable" }) {
-  const cat = taskCategoryOf(card);
-  const catColor = TASK_CATEGORY_COLOR[cat];
+function TaskCardBody({ card, lane, onToggle, dragHandleProps, dragging, density = "comfortable", escalateAfterDays = 0 }) {
   const D = BOARD_DENSITY[density] || BOARD_DENSITY.comfortable;
   const subDone = (card.subtasks || []).filter(s => s.done).length;
   const subTotal = (card.subtasks || []).length;
-  // Metadata is packed into one compact row so cards stay short at a glance.
-  const meta = [];
-  if (card.dueDate) {
-    const overdue = card.dueDate < isoDate();
-    const isToday = card.dueDate === isoDate();
-    meta.push({ key: "due", text: `📅 ${taskDueLabel(card.dueDate)}`, color: overdue ? C.red : isToday ? C.accent : C.muted });
-  }
-  if (card.recurrence?.kind === "weekly") {
-    meta.push({ key: "rec", text: `🔁 ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][card.recurrence.weekday]}`, color: C.blue });
-  }
-  if (subTotal > 0) {
-    // Flag the soonest date among unfinished subtasks so a slipping step is
-    // visible on the board, not buried in the detail view.
-    const pending = (card.subtasks || []).filter(s => !s.done && s.due).map(s => s.due).sort();
-    const soonest = pending[0];
-    const subColor = subDone === subTotal ? C.green
-      : (soonest && soonest < isoDate()) ? C.red
-      : (soonest && soonest === isoDate()) ? C.accent
-      : C.muted;
-    meta.push({
-      key: "sub",
-      text: `☑ ${subDone}/${subTotal}${soonest ? ` · ${taskDueLabel(soonest)}` : ""}`,
-      color: subColor,
-    });
-  }
-  if (card.notes) meta.push({ key: "note", text: "📝", color: C.muted });
-  if (card.blocked) meta.push({ key: "blk", text: "⏸ waiting", color: C.yellow });
+  const u = taskUrgency(card, escalateAfterDays);
+  // Templates carry their weekday instead of an urgency reading.
+  const isTpl = isTaskTemplate(card);
+  const primaryLabel = isTpl
+    ? `repeats ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][card.recurrence.weekday]}`
+    : u.label;
+  const primaryColor = isTpl ? BOARD_HEADER_GREY : u.color;
+  const hasMeta = !!primaryLabel || subTotal > 0 || !!card.notes;
 
   return (
-    <div style={{
-      background: dragging ? "#222" : "#1a1a1a",
-      border: `1px solid ${dragging ? TASK_LANE_COLOR[lane] : (card.blocked ? C.yellow + "55" : C.border2)}`,
-      borderRadius: 8, padding: `${D.padV}px ${D.padH}px`, marginBottom: D.gapY,
+    <div className="iron-task-card" style={{
+      background: dragging ? "#1e1e1e" : CARD_BG,
+      // Urgency owns the left edge — the only hot color on a card.
+      borderLeft: `2px solid ${isTpl ? URGENCY.neutral : u.color}`,
+      borderTop: "1px solid transparent", borderRight: "1px solid transparent",
+      borderBottom: `1px solid ${dragging ? "transparent" : "#1c1c1c"}`,
+      borderRadius: 0,
+      padding: `${D.padV}px ${D.padH}px`, marginBottom: D.gapY,
       minHeight: D.minH, boxSizing: "border-box",
       display: "flex", alignItems: "center", gap: 8,
       boxShadow: dragging ? "0 8px 24px rgba(0,0,0,0.5)" : "none",
-      opacity: card.blocked ? 0.8 : 1,
-      transition: "min-height 0.15s ease, padding 0.15s ease",
+      // Waiting recedes; blocked never dims.
+      opacity: u.dim ? 0.45 : 1,
+      transition: "min-height 0.15s ease, padding 0.15s ease, opacity 0.15s ease",
     }}>
-      {/* Drag handle — subtle but always available, on every device. Dragging
-          starts here immediately (never long-press-only). */}
-      <span {...(dragHandleProps || {})} aria-label="Drag to reorder"
-        style={{ flexShrink: 0, width: 20, alignSelf: "stretch", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: D.handle, cursor: "grab", lineHeight: 1, touchAction: "none", opacity: 0.55 }}>⠿</span>
+      {/* Drag handle — hidden until hover on pointer devices (pure noise across
+          dozens of cards), always visible on touch where there is no hover. */}
+      <span {...(dragHandleProps || {})} aria-label="Drag to reorder" className="iron-grip"
+        style={{ flexShrink: 0, width: 16, alignSelf: "stretch", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: D.handle, cursor: "grab", lineHeight: 1, touchAction: "none" }}>⠿</span>
       {/* Checkbox — every lane. Only recurring templates lack one, since a
           standing commitment is never itself "done" (you tick its copy). */}
       {!card.recurrence && (
@@ -1137,33 +1209,24 @@ function TaskCardBody({ card, lane, onToggle, onChangeCategory, dragHandleProps,
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: D.font, color: card.done?C.muted:C.text, fontFamily: MONO, lineHeight: D.line, textDecoration: card.done?"line-through":"none", wordBreak: "break-word" }}>{card.text}</div>
-        {meta.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 3 }}>
-            {meta.map(m => (
-              <span key={m.key} style={{ fontSize: D.meta, color: m.color, fontFamily: MONO, letterSpacing: "0.03em", whiteSpace: "nowrap" }}>{m.text}</span>
-            ))}
+        {/* Metadata only renders when it exists — a bare task stays one line. */}
+        {hasMeta && (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 7, marginTop: 3 }}>
+            {primaryLabel && (
+              <span style={{ fontSize: 11, color: primaryColor, fontFamily: MONO, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>{primaryLabel}</span>
+            )}
+            {subTotal > 0 && (
+              <span style={{ fontSize: 11, color: SUBTASK_GREY, fontFamily: MONO, whiteSpace: "nowrap" }}>{subDone}/{subTotal}</span>
+            )}
+            {card.notes && <span style={{ fontSize: 11, color: SUBTASK_GREY, fontFamily: MONO }}>·</span>}
           </div>
         )}
       </div>
-      {/* Always-visible category chip — one tap to flip work↔personal. */}
-      {onChangeCategory ? (
-        <button
-          onPointerDown={e=>e.stopPropagation()}
-          onClick={e=>{ e.stopPropagation(); onChangeCategory(card.id, cat === "work" ? "personal" : "work"); }}
-          title={`${TASK_CATEGORY_LABEL[cat]} — tap to change`}
-          style={{ flexShrink: 0, alignSelf: "center", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, cursor: "pointer", letterSpacing: "0.06em", fontWeight: 700, lineHeight: 1.4 }}>
-          {cat === "work" ? "WORK" : "PERS"}
-        </button>
-      ) : (
-        <span style={{ flexShrink: 0, alignSelf: "center", background: catColor + "1a", border: `1px solid ${catColor}66`, borderRadius: 6, color: catColor, padding: "2px 6px", fontSize: 9, fontFamily: MONO, letterSpacing: "0.06em", fontWeight: 700, lineHeight: 1.4 }}>
-          {cat === "work" ? "WORK" : "PERS"}
-        </span>
-      )}
     </div>
   );
 }
 
-function SortableTaskCard({ card, lane, onToggle, onOpenDetail, onChangeCategory, density, touchMode }) {
+function SortableTaskCard({ card, lane, onToggle, onOpenDetail, density, touchMode, escalateAfterDays }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id });
   const dragProps = { ...attributes, ...listeners };
   const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
@@ -1181,7 +1244,7 @@ function SortableTaskCard({ card, lane, onToggle, onOpenDetail, onChangeCategory
   return (
     <div ref={setNodeRef} {...bodyDrag} {...openHandlers}
       style={{ ...style, cursor: touchMode ? "pointer" : (isDragging ? "grabbing" : "grab"), touchAction: touchMode ? "auto" : "manipulation" }}>
-      <TaskCardBody card={card} lane={lane} onToggle={onToggle} onChangeCategory={onChangeCategory} density={density} dragHandleProps={handleDrag} />
+      <TaskCardBody card={card} lane={lane} onToggle={onToggle} density={density} dragHandleProps={handleDrag} escalateAfterDays={escalateAfterDays} />
     </div>
   );
 }
@@ -1190,24 +1253,29 @@ function SortableTaskCard({ card, lane, onToggle, onOpenDetail, onChangeCategory
 // minHeight ensures dnd-kit's collision detection still has a real target
 // when the lane is empty — otherwise "Keep in Mind" (which often has no cards)
 // collapses to ~60px and becomes essentially undroppable.
-function TaskLane({ lane, color, itemIds, count, children, footer, focused, onToggleFocus, flexBasis, fullWidth }) {
+function TaskLane({ lane, itemIds, actionable, waiting, children, footer, focused, onToggleFocus, fullWidth, weight = 1 }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane });
   const isEmpty = (itemIds?.length || 0) === 0;
   return (
     <div ref={setNodeRef}
       onDoubleClick={onToggleFocus ? (e)=>{ e.stopPropagation(); onToggleFocus(lane); } : undefined}
       style={{
-        flex: fullWidth ? "1 1 100%" : `1 1 ${flexBasis || BOARD_COL_MIN}px`,
+        // Keep in Mind carries less weight than the lanes where work happens.
+        flex: fullWidth ? "1 1 100%" : `${weight} ${weight} ${Math.round(BOARD_COL_MIN * weight)}px`,
         minWidth: 0, minHeight: 340,
-        background: C.card, border: `1px solid ${isOver?color:(focused?color+"66":C.border)}`,
+        background: C.surface, border: `1px solid ${isOver ? BOARD_HEADER_GREY : (focused ? "#3a3a3a" : C.border)}`,
         borderRadius: 12, padding: 14,
-        transition: "border-color 0.15s, flex-basis 0.28s cubic-bezier(0.2,0.8,0.3,1)",
+        transition: "border-color 0.15s, flex 0.28s cubic-bezier(0.2,0.8,0.3,1)",
         display: "flex", flexDirection: "column",
       }}>
+      {/* Column headers are deliberately neutral — red belongs to overdue alone. */}
       <div title={onToggleFocus ? "Double-click to focus this column" : undefined}
-        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, cursor: onToggleFocus ? "pointer" : "default", userSelect: "none" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color, fontFamily: MONO, letterSpacing: "0.06em" }}>{lane.toUpperCase()}</div>
-        <span style={{ fontSize: 11, color: C.dim, fontFamily: MONO }}>{count}</span>
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 10, cursor: onToggleFocus ? "pointer" : "default", userSelect: "none" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: BOARD_HEADER_GREY, fontFamily: MONO, letterSpacing: "0.08em" }}>{lane.toUpperCase()}</div>
+        {/* An honest count: waiting work isn't workload. */}
+        <span style={{ fontSize: 10, color: "#5a5a5a", fontFamily: MONO, whiteSpace: "nowrap" }}>
+          {actionable} actionable{waiting > 0 ? ` · ${waiting} waiting` : ""}
+        </span>
       </div>
       <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
         {children}
@@ -1253,6 +1321,16 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
   const [density, setDensity] = useState(() => {
     try { return localStorage.getItem("iron_board_density") || "comfortable"; } catch { return "comfortable"; }
   });
+  // Grace period after a waiting task's follow-up date before it escalates to
+  // blocked. 0 = escalate on the follow-up date itself.
+  const [escalateAfterDays, setEscalateAfterDays] = useState(() => {
+    try { return parseInt(localStorage.getItem("iron_escalate_after_days")) || 0; } catch { return 0; }
+  });
+  function changeEscalation(n) {
+    const v = Math.max(0, Math.min(30, n));
+    setEscalateAfterDays(v);
+    try { localStorage.setItem("iron_escalate_after_days", String(v)); } catch {}
+  }
   function changeDensity(next) {
     setDensity(next);
     try { localStorage.setItem("iron_board_density", next); } catch {}
@@ -1465,12 +1543,21 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
             <button onClick={()=>setFocusedLane(null)}
               style={{background:"transparent",border:`1px solid ${C.blue}66`,borderRadius:7,color:C.blue,fontSize:10,fontFamily:MONO,padding:"4px 10px",cursor:"pointer",letterSpacing:"0.04em"}}>← Back to board</button>
           )}
+          {/* Escalation grace period for waiting tasks past their follow-up. */}
+          <label title="Days after a waiting task's follow-up date before it escalates to blocked"
+            style={{display:"flex",alignItems:"center",gap:5,fontSize:9.5,color:C.muted,fontFamily:MONO,letterSpacing:"0.04em"}}>
+            escalate&nbsp;+
+            <input type="number" min="0" max="30" value={escalateAfterDays}
+              onChange={e=>changeEscalation(parseInt(e.target.value)||0)}
+              style={{width:38,background:"transparent",border:`1px solid ${C.border2}`,borderRadius:6,color:C.sub,fontSize:9.5,fontFamily:MONO,padding:"4px 5px",outline:"none",textAlign:"center"}}/>
+            d
+          </label>
           {/* Density toggle — overview vs readability, without browser zoom. */}
           <div style={{display:"flex",border:`1px solid ${C.border2}`,borderRadius:7,overflow:"hidden"}}>
             {[["compact","Compact"],["comfortable","Comfortable"]].map(([key,label])=>(
               <button key={key} onClick={()=>changeDensity(key)}
                 title={key==="compact"?"More tasks on screen (Ctrl/Cmd −)":"Easier reading (Ctrl/Cmd +)"}
-                style={{background:density===key?C.accent+"22":"transparent",color:density===key?C.accent:C.muted,border:"none",fontSize:9.5,fontFamily:MONO,padding:"5px 10px",cursor:"pointer",letterSpacing:"0.05em",fontWeight:density===key?700:400}}>
+                style={{background:density===key?"#2a2a2a":"transparent",color:density===key?C.text:C.muted,border:"none",fontSize:9.5,fontFamily:MONO,padding:"5px 10px",cursor:"pointer",letterSpacing:"0.05em",fontWeight:density===key?700:400}}>
                 {label}
               </button>
             ))}
@@ -1483,11 +1570,12 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           {LANES.map(lane=>{
             const active = activeLane===lane;
-            const n = laneCards(lane).length;
+            const cs = laneCards(lane);
+            const n = cs.filter(k => effectiveTaskStatus(k, escalateAfterDays) !== "waiting").length;
             return (
               <button key={lane} onClick={()=>setActiveLane(lane)}
-                style={{flex:1,background:active?laneColor[lane]+"22":"transparent",border:`1px solid ${active?laneColor[lane]:C.border2}`,borderRadius:8,color:active?laneColor[lane]:C.muted,padding:"9px 4px",fontSize:11,fontFamily:MONO,cursor:"pointer",fontWeight:active?700:400,letterSpacing:"0.03em"}}>
-                {TASK_LANE_SHORT[lane]} <span style={{opacity:0.7,fontSize:10}}>{n}</span>
+                style={{flex:1,background:active?"#2a2a2a":"transparent",border:`1px solid ${active?"#3a3a3a":C.border2}`,borderRadius:8,color:active?C.text:C.muted,padding:"9px 4px",fontSize:11,fontFamily:MONO,cursor:"pointer",fontWeight:active?700:400,letterSpacing:"0.03em"}}>
+                {TASK_LANE_SHORT[lane]} <span style={{opacity:0.6,fontSize:10}}>{n}</span>
               </button>
             );
           })}
@@ -1503,10 +1591,14 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
           }).map(lane=>{
             const lc = laneColor[lane];
             const cards = laneCards(lane);
-            const rows = groupTasksForRender(cards);
+            const rows = groupTasksForRender(cards, { escalateAfterDays });
             const sortedIds = rows.filter(r=>r.kind==="card").map(r=>r.card.id);
+            // Blocked counts as actionable — it needs the user, urgently.
+            const waitingCount = cards.filter(k => effectiveTaskStatus(k, escalateAfterDays) === "waiting").length;
             return (
-              <TaskLane key={lane} lane={lane} color={lc} itemIds={sortedIds} count={cards.length}
+              <TaskLane key={lane} lane={lane} itemIds={sortedIds}
+                actionable={cards.length - waitingCount} waiting={waitingCount}
+                weight={lane === "Keep in Mind" ? 0.7 : 1}
                 fullWidth={segmented || !!focusedLane}
                 focused={focusedLane===lane}
                 onToggleFocus={segmented ? null : (l)=>setFocusedLane(cur => cur===l ? null : l)}
@@ -1543,22 +1635,25 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                       🔁 REPEATING <span style={{color:C.dim,fontWeight:400,letterSpacing:"0.04em"}}>· auto-adds to Today</span>
                     </div>
                   ) : (
-                    <div key={row.key} style={{fontSize:9,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.14em",fontWeight:700,margin:"10px 0 4px 4px",paddingBottom:3,borderBottom:`1px solid ${TASK_CATEGORY_COLOR[row.category]}33`}}>
-                      {TASK_CATEGORY_LABEL[row.category]}
+                    // Category lives here and nowhere else: hairline rule above,
+                    // small-caps label in the category colour.
+                    <div key={row.key} style={{borderTop:`0.5px solid #262626`,marginTop:12,paddingTop:7,marginBottom:5}}>
+                      <span style={{fontSize:11,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.08em",fontVariant:"small-caps",textTransform:"lowercase"}}>
+                        {TASK_CATEGORY_LABEL[row.category]}
+                      </span>
                     </div>
                   )
                 ) : (
                   <SortableTaskCard key={row.key} card={row.card} lane={lane} onToggle={onToggleTask}
                     onOpenDetail={(id,ln)=>setMenuCard({id,lane:ln})}
-                    density={density} touchMode={isMobile}
-                    onChangeCategory={onUpdateTask ? (id, next) => onUpdateTask(id, { category: next }) : null} />
+                    density={density} touchMode={isMobile} escalateAfterDays={escalateAfterDays} />
                 ))}
               </TaskLane>
             );
           })}
         </div>
         <DragOverlay dropAnimation={null}>
-          {activeId && cardById[activeId] ? <div style={{width:260}}><TaskCardBody card={cardById[activeId]} lane={findLane(activeId)} density={density} dragging /></div> : null}
+          {activeId && cardById[activeId] ? <div style={{width:260}}><TaskCardBody card={cardById[activeId]} lane={findLane(activeId)} density={density} escalateAfterDays={escalateAfterDays} dragging /></div> : null}
         </DragOverlay>
       </DndContext>
       <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:8,lineHeight:1.5}}>
@@ -1662,12 +1757,53 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     </div>
                   )}
 
-                  {/* Waiting / blocked */}
-                  <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>STATUS</div>
-                  <button onClick={()=>patch({ blocked: !card.blocked })}
-                    style={{width:"100%",background:card.blocked?C.yellow+"1a":"transparent",border:`1px solid ${card.blocked?C.yellow:C.border2}`,borderRadius:8,color:card.blocked?C.yellow:C.muted,padding:"10px",fontSize:11,fontFamily:MONO,cursor:"pointer",marginBottom:14,letterSpacing:"0.04em",fontWeight:card.blocked?700:400}}>
-                    {card.blocked ? "⏸ Waiting on something" : "Mark as waiting / blocked"}
-                  </button>
+                  {/* Actionability: waiting recedes, blocked escalates. */}
+                  {(() => {
+                    const status = taskStatusOf(card);
+                    const opts = [
+                      { key: null,        label: "Active",   color: C.muted },
+                      { key: "waiting",   label: "Waiting",  color: URGENCY.waiting },
+                      { key: "blocked",   label: "Blocked",  color: URGENCY.blocked },
+                    ];
+                    return (
+                      <>
+                        <div style={{fontSize:9,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:7}}>STATUS</div>
+                        <div style={{display:"flex",gap:6,marginBottom:card.status||card.blocked?8:14}}>
+                          {opts.map(o => {
+                            const active = status === o.key;
+                            return (
+                              <button key={o.label} onClick={()=>{
+                                if (o.key === "waiting") {
+                                  patch({ status: "waiting", blocked: false, waitingSince: card.waitingSince || isoDate() });
+                                } else if (o.key === "blocked") {
+                                  patch({ status: "blocked", blocked: false });
+                                } else {
+                                  patch({ status: null, blocked: false, waitingSince: null, waitingOn: null, followUpDate: null });
+                                }
+                              }}
+                                style={{flex:1,background:active?o.color+"22":"transparent",border:`1px solid ${active?o.color:C.border}`,borderRadius:8,color:active?o.color:C.text,padding:"9px 4px",fontSize:11,fontFamily:MONO,cursor:"pointer",fontWeight:active?700:400}}>
+                                {o.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {status === "waiting" && (
+                          <div style={{background:"#141414",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px",marginBottom:14}}>
+                            <input defaultValue={card.waitingOn || ""} placeholder="Waiting on who / what?"
+                              onBlur={e=>{ const v=e.target.value.trim(); if((card.waitingOn||"")!==v) patch({ waitingOn: v || null }); }}
+                              style={{width:"100%",background:"transparent",border:"none",borderBottom:`1px solid ${C.border2}`,color:C.text,fontSize:12,fontFamily:MONO,padding:"5px 2px",outline:"none",boxSizing:"border-box",marginBottom:9}}/>
+                            <div style={{fontSize:9.5,color:C.muted,fontFamily:MONO,marginBottom:5}}>Check back when?</div>
+                            <input type="date" value={card.followUpDate || ""}
+                              onChange={e=>patch({ followUpDate: e.target.value || null })}
+                              style={{width:"100%",background:"#161616",border:`1px solid ${card.followUpDate?URGENCY.dueToday:C.border2}`,borderRadius:6,color:card.followUpDate?URGENCY.dueToday:C.muted,fontSize:11.5,fontFamily:MONO,padding:"7px 9px",outline:"none",colorScheme:"dark",boxSizing:"border-box"}}/>
+                            <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:6,lineHeight:1.5}}>
+                              Dimmed until then. On the day it wakes up; if it passes{escalateAfterDays>0?` by more than ${escalateAfterDays}d`:""} without a change it escalates to blocked.
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <div>
@@ -4220,6 +4356,10 @@ export default function App() {
       if (patch.startDate === null || patch.startDate === "") delete next.startDate;
       if (patch.notes === null || patch.notes === "") delete next.notes;
       if (patch.blocked === false) delete next.blocked;
+      if (patch.status === null) delete next.status;
+      if (patch.waitingOn === null || patch.waitingOn === "") delete next.waitingOn;
+      if (patch.waitingSince === null) delete next.waitingSince;
+      if (patch.followUpDate === null || patch.followUpDate === "") delete next.followUpDate;
       if (Array.isArray(patch.subtasks) && patch.subtasks.length === 0) delete next.subtasks;
       if (patch.recurrence === null) { delete next.recurrence; delete next.lastSpawned; }
       return next;
@@ -4647,6 +4787,13 @@ _s.textContent=`
 }
 @keyframes checkDraw{from{stroke-dashoffset:22}to{stroke-dashoffset:0}}
 @keyframes setFlashPop{0%{transform:scale(0.3);opacity:0}18%{transform:scale(1.12);opacity:1}55%{transform:scale(1);opacity:1}100%{transform:scale(0.85);opacity:0}}
+/* Drag handle is noise across dozens of cards — reveal it on hover. Touch
+   devices have no hover, so there it stays visible and reachable. */
+.iron-grip{opacity:.5;transition:opacity .12s ease}
+@media (hover: hover) and (pointer: fine){
+  .iron-task-card .iron-grip{opacity:0}
+  .iron-task-card:hover .iron-grip{opacity:.5}
+}
 input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}
 *{-webkit-tap-highlight-color:transparent}
 textarea{font-family:'DM Mono','Courier New',monospace}
