@@ -1018,6 +1018,42 @@ const BOARD_HEADER_GREY = "#8a8a8a";
 function readEscalateAfterDays() {
   try { return parseInt(localStorage.getItem("iron_escalate_after_days")) || 0; } catch { return 0; }
 }
+
+// ── Lane promotion ──────────────────────────────────────────────────────────
+// Lanes are a pipeline, not static buckets: work drifts LEFT as its date nears.
+// Keep in Mind → This Week (inside the next week) → Today (due today or past).
+// Promotion only ever moves left — nothing is ever demoted, so a card you drag
+// into Today stays there regardless of its date.
+const PROMOTE_WINDOW_DAYS = 7;
+// The date a card should be judged by for promotion. A waiting task is measured
+// by when to check back, not by a due date it's already exempt from.
+function promotionDate(card) {
+  if (taskStatusOf(card) === "waiting") return card.followUpDate || null;
+  const due = effectiveDueDate(card);   // includes the soonest unfinished subtask
+  return due ? due.date : null;
+}
+// Today and This Week are dated lanes — a card there must say when. Keep in
+// Mind is the one place something is allowed to have no date at all.
+function defaultDueForLane(lane, today) {
+  if (lane === "Today") return today;
+  if (lane === "This Week") {
+    const week = getWeekDays(0);
+    const endOfWeek = week[week.length - 1];
+    return endOfWeek >= today ? endOfWeek : today;
+  }
+  return null;
+}
+// Returns the lane a card has earned, or null to leave it alone.
+function lanePromotionTarget(card, today) {
+  if (card.done || card.recurrence) return null;
+  // Blocked needs a human now, wherever it was parked.
+  if (taskStatusOf(card) === "blocked") return "Today";
+  const d = promotionDate(card);
+  if (!d) return null;
+  if (d <= today) return "Today";
+  if (d <= addDaysIso(today, PROMOTE_WINDOW_DAYS)) return "This Week";
+  return null;
+}
 const CARD_BG = "#141414";
 const SUBTASK_GREY = "#5a5a5a";
 
@@ -1778,11 +1814,18 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                     <input type="date" value={card.dueDate || ""}
                       onChange={e=>patch({ dueDate: e.target.value || null })}
                       style={{flex:1,minWidth:0,background:"#161616",border:`1px solid ${C.border2}`,borderRadius:8,color:card.dueDate?C.accent:C.muted,padding:"9px 11px",fontSize:12,fontFamily:MONO,outline:"none",colorScheme:"dark"}}/>
-                    {card.dueDate && (
+                    {/* Only Keep in Mind may be undated — elsewhere the board
+                        would just backfill a date straight back in. */}
+                    {card.dueDate && menuCard.lane === "Keep in Mind" && (
                       <button onClick={()=>patch({ dueDate: null })}
                         style={{flexShrink:0,background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.muted,padding:"9px 10px",fontSize:10,cursor:"pointer",fontFamily:MONO}}>Clear</button>
                     )}
                   </div>
+                  {menuCard.lane !== "Keep in Mind" && (
+                    <div style={{fontSize:9,color:C.dim,fontFamily:MONO,marginTop:-8,marginBottom:14,lineHeight:1.5}}>
+                      {menuCard.lane} needs a date. Move to Keep in Mind to leave it undated.
+                    </div>
+                  )}
 
                   {/* Repeats — a recurring card becomes a template and lives in
                       Keep in Mind; instances appear in Today on the day. */}
@@ -4323,7 +4366,31 @@ export default function App() {
     }
     const strayIds = new Set(strayTemplates);
 
-    if (templatesToSpawn.length === 0 && !doSweep && strayIds.size === 0) {
+    // Lane promotion: work drifts left as its date approaches.
+    // moveTo collects every relocation this pass — stray templates heading
+    // right to Keep in Mind, and dated cards being promoted left.
+    const moveTo = new Map();
+    strayIds.forEach(id => moveTo.set(id, "Keep in Mind"));
+    for (const col of (board.cols || [])) {
+      const fromIdx = LANES.indexOf(col.name);
+      if (fromIdx < 0) continue;
+      for (const k of (col.cards || [])) {
+        if (strayIds.has(k.id)) continue;
+        const target = lanePromotionTarget(k, t);
+        if (!target) continue;
+        // Only ever move LEFT — never demote something the user placed.
+        if (LANES.indexOf(target) >= fromIdx) continue;
+        moveTo.set(k.id, target);
+      }
+    }
+
+    // Any undated card sitting in a dated lane needs backfilling.
+    const needsDate = (board.cols || []).some(c =>
+      defaultDueForLane(c.name, t) &&
+      (c.cards || []).some(k => !k.done && !k.recurrence && !k.dueDate)
+    );
+
+    if (templatesToSpawn.length === 0 && !doSweep && moveTo.size === 0 && !needsDate) {
       if (shouldSweep) { try { localStorage.setItem(KEY, t); } catch {} }
       return;
     }
@@ -4345,27 +4412,39 @@ export default function App() {
 
     boardsState.setAll(bs => bs.map((b, i) => {
       if (i !== 0) return b;
-      // Pull stray templates out of their current lanes first.
-      const relocated = [];
+      // Lift every relocating card out of its lane, remembering where it's bound.
+      const inFlight = [];
       let cols = (b.cols || []).map(c => {
-        if (c.name === "Keep in Mind") return c;
-        const keep = [], move = [];
-        for (const k of (c.cards || [])) (strayIds.has(k.id) ? move : keep).push(k);
-        relocated.push(...move);
+        const keep = [];
+        for (const k of (c.cards || [])) {
+          const dest = moveTo.get(k.id);
+          if (dest && dest !== c.name) inFlight.push({ card: k, dest });
+          else keep.push(k);
+        }
         return { ...c, cards: keep };
       });
+      const stamp = (k) => {
+        const withSpawn = spawnedIds.has(k.id) ? { ...k, lastSpawned: t } : k;
+        return withSpawn;
+      };
       return {
         ...b,
         cols: cols.map(c => {
-          let cards = c.cards.map(k => spawnedIds.has(k.id) ? { ...k, lastSpawned: t } : k);
+          let cards = c.cards.map(stamp);
           // Sweep Today only; preserve templates even if accidentally checked
           if (doSweep && c.name === "Today") cards = cards.filter(k => !k.done || k.recurrence);
           // Drop spawned instances into Today lane
           if (c.name === "Today" && newInstances.length > 0) cards = [...cards, ...newInstances];
-          // Land relocated templates in Keep in Mind
-          if (c.name === "Keep in Mind" && relocated.length > 0) {
-            cards = [...cards, ...relocated.map(k => spawnedIds.has(k.id) ? { ...k, lastSpawned: t } : k)];
-          }
+          // Land everything that moved — promotions and stray templates alike.
+          const incoming = inFlight.filter(x => x.dest === c.name).map(x => stamp(x.card));
+          if (incoming.length > 0) cards = [...cards, ...incoming];
+          // Today and This Week are dated lanes: anything living there without a
+          // date gets one, so the pipeline has something to act on.
+          cards = cards.map(k => {
+            if (k.done || k.recurrence || k.dueDate) return k;
+            const d = defaultDueForLane(c.name, t);
+            return d ? { ...k, dueDate: d } : k;
+          });
           return { ...c, cards };
         }),
       };
@@ -4418,7 +4497,10 @@ export default function App() {
   function addTask(laneName, text, dueDate = null, category = "work") {
     if (!text.trim() || !board) return;
     const card = { id: uid(), text: text.trim(), tags: [], done: false, category };
-    if (dueDate) card.dueDate = dueDate;
+    // Today and This Week require a date; fall back to the lane's own meaning
+    // (today / end of this week) so nothing lands there undated.
+    const due = dueDate || defaultDueForLane(laneName, isoDate());
+    if (due) card.dueDate = due;
     updateBoard(b => ({ ...b, cols: b.cols.map(c => c.name===laneName ? { ...c, cards: [...c.cards, card] } : c) }));
   }
   // Generic per-card edit — used to set/clear dueDate + recurrence from the
