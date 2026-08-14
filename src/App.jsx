@@ -1439,6 +1439,17 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
     if (!over) { setActiveId(null); return; }
     const from = findLane(active.id);
     const to = findLane(over.id);
+    // Dropping onto a card in the other category section re-files this task.
+    // Cards are grouped by category on render, so without this the card would
+    // simply snap back to where it started and the drag would look broken.
+    if (onUpdateTask && !LANES.includes(over.id)) {
+      const dragged = cardById[active.id];
+      const target = cardById[over.id];
+      if (dragged && target && !isTaskTemplate(dragged)) {
+        const targetCat = taskCategoryOf(target);
+        if (taskCategoryOf(dragged) !== targetCat) onUpdateTask(active.id, { category: targetCat });
+      }
+    }
     let next = laneItems;
     if (from && to && from === to) {
       const ids = laneItems[from] || [];
@@ -1660,8 +1671,8 @@ function FocusTab({ focusSessions, onAddSession, board, onAddTask, onToggleTask,
                   ) : (
                     // Category lives here and nowhere else: hairline rule above,
                     // small-caps label in the category colour.
-                    <div key={row.key} style={{borderTop:`0.5px solid #262626`,marginTop:12,paddingTop:7,marginBottom:5}}>
-                      <span style={{fontSize:11,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.08em",fontVariant:"small-caps",textTransform:"lowercase"}}>
+                    <div key={row.key} style={{borderTop:`0.5px solid #262626`,marginTop:14,paddingTop:9,marginBottom:6}}>
+                      <span style={{fontSize:13,fontWeight:700,color:TASK_CATEGORY_COLOR[row.category],fontFamily:MONO,letterSpacing:"0.1em",fontVariant:"small-caps",textTransform:"lowercase"}}>
                         {TASK_CATEGORY_LABEL[row.category]}
                       </span>
                     </div>
