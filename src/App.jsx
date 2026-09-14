@@ -10,6 +10,7 @@ import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
   useFocusSessions, useBoards, useCustomExercises, useRooneyMemories,
   useZone2Log, useSettings, useRooneyConversation, useGoalLogs, useGoalSnapshots, useBodyweight, migrateLocalStorage,
+  isRetryableAuthError,
 } from "./lib/supabaseHooks";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -4061,6 +4062,10 @@ function LoadingScreen({ text="Loading..." }) {
   );
 }
 
+// Shown when Supabase can't be reached (after automatic retries), so a network
+// outage doesn't read like a wrong password or a broken app.
+const AUTH_NETWORK_MSG = "Can't reach the login server right now. Supabase, where your data is stored, is having trouble connecting. This isn't a wrong password and your data is safe. Wait a minute and try again.";
+
 function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
   const [mode, setMode] = useState("signin"); // signin | signup
   const [email, setEmail] = useState("");
@@ -4084,7 +4089,7 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
       const { data, error } = await onSignUp(email.trim(), password);
       setBusy(false);
       if (error) {
-        setErr(error.message?.includes("already") ? "An account with that email already exists. Switch to Sign in." : (error.message || "Sign-up failed."));
+        setErr(isRetryableAuthError(error) ? AUTH_NETWORK_MSG : error.message?.includes("already") ? "An account with that email already exists. Switch to Sign in." : (error.message || "Sign-up failed."));
       } else if (data?.user && !data?.session) {
         // Email confirmation is still ON in Supabase — tell them
         setMsg("Account created, but email confirmation is enabled. Disable it in Supabase (Authentication > Providers > Email > turn off Confirm email) for instant sign-in.");
@@ -4094,7 +4099,7 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
       setBusy(true);
       const { error } = await onSignIn(email.trim(), password);
       setBusy(false);
-      if (error) setErr(error.message?.includes("Invalid") ? "Wrong email or password." : (error.message || "Sign-in failed."));
+      if (error) setErr(isRetryableAuthError(error) ? AUTH_NETWORK_MSG : error.message?.includes("Invalid") ? "Wrong email or password." : (error.message || "Sign-in failed."));
     }
   }
 
@@ -4104,7 +4109,7 @@ function SignInScreen({ onSignIn, onSignUp, onResetPassword }) {
     setBusy(true);
     const { error } = await onResetPassword(email.trim());
     setBusy(false);
-    if (error) setErr(error.message || "Couldn't send reset email.");
+    if (error) setErr(isRetryableAuthError(error) ? AUTH_NETWORK_MSG : (error.message || "Couldn't send reset email."));
     else setMsg("Password reset email sent. Check your inbox and follow the link to set a new password.");
   }
 
@@ -4423,8 +4428,15 @@ export default function App() {
   // or tab visibility change), plus a light 60-second heartbeat while active.
   // Uses a single ref so the sync effect below isn't rebound on every render.
   const refreshAllRef = useRef(() => {});
+  const lastRefreshAtRef = useRef(0);
   refreshAllRef.current = () => {
     if (!userId) return;
+    // Focus, visibilitychange and tab taps often fire together. When Supabase
+    // is slow, overlapping bursts of a dozen queries pile up and make the whole
+    // app slower, so run at most one burst every 10 seconds.
+    const now = Date.now();
+    if (now - lastRefreshAtRef.current < 10000) return;
+    lastRefreshAtRef.current = now;
     workoutsState.refresh?.();
     dietState.refresh?.();
     activityState.refresh?.();

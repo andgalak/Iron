@@ -24,16 +24,51 @@ function warnIfSchemaMissing(error, label) {
 }
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
+// ─── Flaky-network resilience ────────────────────────────────────────────────
+// Supabase's gateway sometimes times out (504) or drops requests, which the
+// browser reports as "Failed to fetch" (Safari: "Load failed"). Those are safe
+// to retry for reads and repeatable writes (update / upsert / delete). Real
+// answers like "wrong password" or a permissions error come back immediately.
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const NETWORK_ERROR_RE = /failed to fetch|load failed|networkerror|network request failed|timed? ?out|upstream|gateway/i;
+
+export function isRetryableAuthError(error) {
+  if (!error) return false;
+  if (error.name === "AuthRetryableFetchError") return true;
+  const status = Number(error.status);
+  return status === 0 || status >= 500 || NETWORK_ERROR_RE.test(String(error.message || ""));
+}
+function isRetryableAuthResult(res) { return isRetryableAuthError(res?.error); }
+function isRetryableResult(res) {
+  if (!res?.error) return false;
+  const status = Number(res.status);
+  return status === 0 || status >= 500 || NETWORK_ERROR_RE.test(String(res.error.message || ""));
+}
+// `call` must build a fresh request each time (a query builder only runs once).
+async function withRetry(call, { attempts = 3, isRetryable = isRetryableResult } = {}) {
+  let res;
+  for (let i = 0; i < attempts; i++) {
+    try { res = await call(); }
+    catch (e) { res = { data: null, error: { message: String(e?.message || e) }, status: 0 }; }
+    if (!isRetryable(res)) return res;
+    if (i < attempts - 1) await sleep(800 * 2 ** i);
+  }
+  return res;
+}
+
 export function useAuth() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!supabaseConfigured) { setLoading(false); return; }
-    supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user || null);
-      setLoading(false);
-    });
+    // Retry so a dropped request during a Supabase hiccup doesn't bounce a
+    // signed-in user to the login screen.
+    withRetry(() => supabase.auth.getSession(), { isRetryable: isRetryableAuthResult })
+      .then(({ data }) => {
+        setUser(data?.session?.user || null);
+        setLoading(false);
+      });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
       setUser(session?.user || null);
     });
@@ -56,7 +91,7 @@ export function useAuth() {
   }, []);
 
   const signInWithPassword = useCallback(async (email, password) => {
-    return supabase.auth.signInWithPassword({ email, password });
+    return withRetry(() => supabase.auth.signInWithPassword({ email, password }), { isRetryable: isRetryableAuthResult });
   }, []);
 
   const signUp = useCallback(async (email, password) => {
@@ -83,8 +118,9 @@ export function useWorkouts(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("workouts").select("*").eq("user_id", userId).order("date", { ascending: false });
-    if (error) console.error("workouts load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("workouts").select("*").eq("user_id", userId).order("date", { ascending: false }));
+    // On a failed read keep what's on screen; an empty list would look like lost data.
+    if (error) { console.error("workouts load:", error); setLoading(false); return; }
     setData(rows || []);
     setLoading(false);
   }, [userId]);
@@ -102,13 +138,13 @@ export function useWorkouts(userId) {
     setData(d => d.map(w => w.id === id ? { ...w, ...patch } : w).sort((a,b)=>new Date(b.date)-new Date(a.date)));
     const cleanPatch = { name: patch.name, date: patch.date, elapsed: patch.elapsed, exercises: patch.exercises };
     Object.keys(cleanPatch).forEach(k => cleanPatch[k] === undefined && delete cleanPatch[k]);
-    const { error } = await supabase.from("workouts").update(cleanPatch).eq("id", id);
+    const { error } = await withRetry(() => supabase.from("workouts").update(cleanPatch).eq("id", id));
     if (error) console.error("update workout:", error);
   }
 
   async function remove(id) {
     setData(d => d.filter(w => w.id !== id));
-    const { error } = await supabase.from("workouts").delete().eq("id", id);
+    const { error } = await withRetry(() => supabase.from("workouts").delete().eq("id", id));
     if (error) console.error("delete workout:", error);
   }
 
@@ -122,8 +158,8 @@ export function useDietLog(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("diet_log").select("*").eq("user_id", userId);
-    if (error) console.error("diet load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("diet_log").select("*").eq("user_id", userId));
+    if (error) { console.error("diet load:", error); setLoading(false); return; }
     const map = {};
     (rows || []).forEach(r => { map[r.date] = r.status; });
     setData(map);
@@ -139,10 +175,10 @@ export function useDietLog(userId) {
       return next;
     });
     if (status === null || status === undefined) {
-      const { error } = await supabase.from("diet_log").delete().eq("user_id", userId).eq("date", date);
+      const { error } = await withRetry(() => supabase.from("diet_log").delete().eq("user_id", userId).eq("date", date));
       if (error) console.error("diet delete:", error);
     } else {
-      const { error } = await supabase.from("diet_log").upsert({ user_id: userId, date, status });
+      const { error } = await withRetry(() => supabase.from("diet_log").upsert({ user_id: userId, date, status }));
       if (error) console.error("diet upsert:", error);
     }
   }
@@ -157,8 +193,8 @@ export function useActivityLog(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("activity_log").select("*").eq("user_id", userId);
-    if (error) console.error("activity load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("activity_log").select("*").eq("user_id", userId));
+    if (error) { console.error("activity load:", error); setLoading(false); return; }
     const map = {};
     (rows || []).forEach(r => { map[r.date] = r.status; });
     setData(map);
@@ -174,10 +210,10 @@ export function useActivityLog(userId) {
       return next;
     });
     if (status === null || status === undefined) {
-      const { error } = await supabase.from("activity_log").delete().eq("user_id", userId).eq("date", date);
+      const { error } = await withRetry(() => supabase.from("activity_log").delete().eq("user_id", userId).eq("date", date));
       if (error) console.error("activity delete:", error);
     } else {
-      const { error } = await supabase.from("activity_log").upsert({ user_id: userId, date, status });
+      const { error } = await withRetry(() => supabase.from("activity_log").upsert({ user_id: userId, date, status }));
       if (error) console.error("activity upsert:", error);
     }
   }
@@ -192,8 +228,8 @@ export function useFocusSessions(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("focus_sessions").select("*").eq("user_id", userId).order("date", { ascending: false });
-    if (error) console.error("focus load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("focus_sessions").select("*").eq("user_id", userId).order("date", { ascending: false }));
+    if (error) { console.error("focus load:", error); setLoading(false); return; }
     setData(rows || []);
     setLoading(false);
   }, [userId]);
@@ -225,11 +261,21 @@ export function useBoards(userId) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const migratedRef = useRef(false);   // Only run the 3-lane migration once per session.
+  // Board saves are queued and written in order (see setAll). While one is
+  // pending, a read can return an older copy than what's on screen, so refresh
+  // throws away its result if a save started during the read.
+  const queuedRef = useRef(null);      // { prev, next } waiting to be written
+  const flushingRef = useRef(false);
+  const saveGenRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: boards, error } = await supabase.from("boards").select("*").eq("user_id", userId).order("position", { ascending: true });
-    if (error) console.error("boards load:", error);
+    const genAtStart = saveGenRef.current;
+    const { data: boards, error } = await withRetry(() => supabase.from("boards").select("*").eq("user_id", userId).order("position", { ascending: true }));
+    // A failed read must never look like "no boards": that used to fall into
+    // the migration below, which deleted every board and inserted an empty one.
+    if (error) { console.error("boards load:", error); setLoading(false); return; }
+    if (flushingRef.current || queuedRef.current || saveGenRef.current !== genAtStart) { setLoading(false); return; }
     let list = boards || [];
 
     // Gentle in-place rename: the middle lane used to be called "In Progress".
@@ -270,10 +316,17 @@ export function useBoards(userId) {
         user_id: userId, name: "Tasks", color: "#FF6B35", position: 0,
         cols: LANES.map((name, i) => ({ id: "lane" + i, name, cards: laneCards[name] })),
       };
+      // Insert the merged board FIRST and delete the old rows only after that
+      // succeeds, so a dropped request can't leave you with no board at all.
+      const oldIds = list.map(b => b.id).filter(id => id && id !== "local");
       try {
-        await supabase.from("boards").delete().eq("user_id", userId);
-        const { data: inserted } = await supabase.from("boards").insert(newBoard).select().single();
-        list = inserted ? [inserted] : [{ ...newBoard, id: "local" }];
+        const { data: inserted, error: insErr } = await supabase.from("boards").insert(newBoard).select().single();
+        if (insErr || !inserted) throw insErr || new Error("board insert returned nothing");
+        if (oldIds.length) {
+          const { error: delErr } = await withRetry(() => supabase.from("boards").delete().in("id", oldIds));
+          if (delErr) console.error("board migration cleanup:", delErr);
+        }
+        list = [inserted];
       } catch (e) { console.error("board migration:", e); list = [{ ...newBoard, id: "local" }]; }
     }
 
@@ -282,39 +335,61 @@ export function useBoards(userId) {
   }, [userId]);
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Writes one prev → next diff. Updates and deletes retry on network errors
+  // (safe to repeat); inserts don't, since a timed-out insert may have landed.
+  const persistDiff = useCallback(async (prev, next) => {
+    for (let i = 0; i < next.length; i++) {
+      const after = next[i];
+      const before = prev.find(b => b.id === after.id);
+      if (!before) {
+        // New board (no id match) — insert
+        const row = { user_id: userId, name: after.name, color: after.color, cols: after.cols, position: i };
+        const { error } = await supabase.from("boards").insert(row);
+        if (error) console.error("board insert:", error);
+      } else if (
+        JSON.stringify(before.cols) !== JSON.stringify(after.cols)
+        || before.name !== after.name
+        || before.color !== after.color
+      ) {
+        const { error } = await withRetry(() => supabase.from("boards").update({ name: after.name, color: after.color, cols: after.cols }).eq("id", after.id));
+        if (error) console.error("board save:", error);
+      }
+    }
+    // Deletions
+    for (const before of prev) {
+      if (!next.find(b => b.id === before.id)) {
+        const { error } = await withRetry(() => supabase.from("boards").delete().eq("id", before.id));
+        if (error) console.error("board delete:", error);
+      }
+    }
+  }, [userId]);
+
+  // All saves go through one queue so they land in order. With slow requests
+  // and retries, an older save could otherwise finish after a newer one and
+  // overwrite it. Edits made while a save is in flight collapse into one write.
+  const flush = useCallback(async () => {
+    if (flushingRef.current) return;
+    flushingRef.current = true;
+    try {
+      while (queuedRef.current) {
+        const { prev, next } = queuedRef.current;
+        queuedRef.current = null;
+        try { await persistDiff(prev, next); } catch (e) { console.error("boards sync:", e); }
+      }
+    } finally { flushingRef.current = false; }
+  }, [persistDiff]);
+
   // Compatible with setBoards(bs => ...) callsites.
   const setAll = useCallback((updater) => {
     setData(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
-      // Persist diffs in background — fire and forget
-      (async () => {
-        try {
-          for (let i = 0; i < next.length; i++) {
-            const after = next[i];
-            const before = prev.find(b => b.id === after.id);
-            if (!before) {
-              // New board (no id match) — insert
-              const row = { user_id: userId, name: after.name, color: after.color, cols: after.cols, position: i };
-              await supabase.from("boards").insert(row);
-            } else if (
-              JSON.stringify(before.cols) !== JSON.stringify(after.cols)
-              || before.name !== after.name
-              || before.color !== after.color
-            ) {
-              await supabase.from("boards").update({ name: after.name, color: after.color, cols: after.cols }).eq("id", after.id);
-            }
-          }
-          // Deletions
-          for (const before of prev) {
-            if (!next.find(b => b.id === before.id)) {
-              await supabase.from("boards").delete().eq("id", before.id);
-            }
-          }
-        } catch (e) { console.error("boards sync:", e); }
-      })();
+      saveGenRef.current++;
+      // Keep the oldest unsaved "before" so the eventual diff covers every edit.
+      queuedRef.current = { prev: queuedRef.current ? queuedRef.current.prev : prev, next };
+      flush();
       return next;
     });
-  }, [userId]);
+  }, [flush]);
 
   return { data, loading, setAll, refresh };
 }
@@ -326,8 +401,8 @@ export function useCustomExercises(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("custom_exercises").select("*").eq("user_id", userId);
-    if (error) console.error("custom ex load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("custom_exercises").select("*").eq("user_id", userId));
+    if (error) { console.error("custom ex load:", error); setLoading(false); return; }
     const map = {};
     (rows || []).forEach(r => { map[r.id] = { name: r.name, muscle: r.muscle, cat: r.cat, custom: true }; });
     setData(map);
@@ -357,8 +432,8 @@ export function useRooneyMemories(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("rooney_memories").select("*").eq("user_id", userId).order("created_at", { ascending: false });
-    if (error) console.error("memories load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("rooney_memories").select("*").eq("user_id", userId).order("created_at", { ascending: false }));
+    if (error) { console.error("memories load:", error); setLoading(false); return; }
     setData(rows || []);
     setLoading(false);
   }, [userId]);
@@ -388,8 +463,8 @@ export function useZone2Log(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("zone2_log").select("*").eq("user_id", userId).order("date", { ascending: false });
-    if (error) console.error("zone2 load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("zone2_log").select("*").eq("user_id", userId).order("date", { ascending: false }));
+    if (error) { console.error("zone2 load:", error); setLoading(false); return; }
     setData(rows || []);
     setLoading(false);
   }, [userId]);
@@ -419,8 +494,10 @@ export function useSettings(userId, defaultGoals) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data, error } = await supabase.from("user_settings").select("goals").eq("user_id", userId).maybeSingle();
-    if (error) console.error("settings load:", error);
+    const { data, error } = await withRetry(() => supabase.from("user_settings").select("goals").eq("user_id", userId).maybeSingle());
+    // A failed read must not fall through to "no settings yet" below, which
+    // writes the default goals over the real ones.
+    if (error) { console.error("settings load:", error); setLoading(false); return; }
     if (data && Array.isArray(data.goals) && data.goals.length > 0) {
       setGoalsState(data.goals);
     } else {
@@ -433,7 +510,7 @@ export function useSettings(userId, defaultGoals) {
 
   async function setGoals(next) {
     setGoalsState(next);
-    const { error } = await supabase.from("user_settings").upsert({ user_id: userId, goals: next, updated_at: new Date().toISOString() });
+    const { error } = await withRetry(() => supabase.from("user_settings").upsert({ user_id: userId, goals: next, updated_at: new Date().toISOString() }));
     if (error) console.error("settings save:", error);
   }
 
@@ -445,18 +522,23 @@ export function useRooneyConversation(userId) {
   const [messages, setMessages] = useState(null); // null = still loading
   const [loading, setLoading] = useState(true);
 
+  // Only write the stored thread after it has loaded once; otherwise a chat
+  // started during a failed load would replace the whole history.
+  const loadedRef = useRef(false);
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data, error } = await supabase.from("rooney_conversation").select("messages").eq("user_id", userId).maybeSingle();
-    if (error) console.error("conversation load:", error);
+    const { data, error } = await withRetry(() => supabase.from("rooney_conversation").select("messages").eq("user_id", userId).maybeSingle());
+    if (error) { console.error("conversation load:", error); setLoading(false); return; }
+    loadedRef.current = true;
     setMessages(Array.isArray(data?.messages) ? data.messages : []);
     setLoading(false);
   }, [userId]);
   useEffect(() => { refresh(); }, [refresh]);
 
   async function save(msgs) {
+    if (!loadedRef.current) return;
     const trimmed = msgs.slice(-120); // cap stored history
-    const { error } = await supabase.from("rooney_conversation").upsert({ user_id: userId, messages: trimmed, updated_at: new Date().toISOString() });
+    const { error } = await withRetry(() => supabase.from("rooney_conversation").upsert({ user_id: userId, messages: trimmed, updated_at: new Date().toISOString() }));
     if (error) console.error("conversation save:", error);
   }
 
@@ -476,8 +558,8 @@ export function useGoalLogs(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("goal_logs").select("*").eq("user_id", userId);
-    if (error) console.error("goal_logs load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("goal_logs").select("*").eq("user_id", userId));
+    if (error) { console.error("goal_logs load:", error); setLoading(false); return; }
     setData(rows || []);
     setLoading(false);
   }, [userId]);
@@ -489,12 +571,12 @@ export function useGoalLogs(userId) {
     const prev = data;
     if (existing) {
       setData(d => d.filter(g => !(g.goal_id === goalId && g.date === date)));
-      const { error } = await supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date);
+      const { error } = await withRetry(() => supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date));
       if (error) { console.error("goal_log delete:", error); setData(prev); warnIfSchemaMissing(error, "habit progress"); }
     } else {
       const row = { user_id: userId, goal_id: goalId, date, completed: true, value: null };
       setData(d => [...d, row]);
-      const { error } = await supabase.from("goal_logs").upsert(row, { onConflict: "user_id,goal_id,date" });
+      const { error } = await withRetry(() => supabase.from("goal_logs").upsert(row, { onConflict: "user_id,goal_id,date" }));
       if (error) { console.error("goal_log upsert:", error); setData(prev); warnIfSchemaMissing(error, "habit progress"); }
     }
   }
@@ -504,13 +586,13 @@ export function useGoalLogs(userId) {
     const prev = data;
     if (!minutes || minutes <= 0) {
       setData(d => d.filter(g => !(g.goal_id === goalId && g.date === date)));
-      const { error } = await supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date);
+      const { error } = await withRetry(() => supabase.from("goal_logs").delete().eq("user_id", userId).eq("goal_id", goalId).eq("date", date));
       if (error) { console.error("goal_log delete:", error); setData(prev); warnIfSchemaMissing(error, "timed goal minutes"); }
       return;
     }
     const row = { user_id: userId, goal_id: goalId, date, completed: true, value: minutes };
     setData(d => { const o = d.filter(g => !(g.goal_id===goalId && g.date===date)); return [...o, row]; });
-    const { error } = await supabase.from("goal_logs").upsert(row, { onConflict: "user_id,goal_id,date" });
+    const { error } = await withRetry(() => supabase.from("goal_logs").upsert(row, { onConflict: "user_id,goal_id,date" }));
     if (error) { console.error("goal_log value:", error); setData(prev); warnIfSchemaMissing(error, "timed goal minutes"); }
   }
 
@@ -524,8 +606,8 @@ export function useGoalSnapshots(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data, error } = await supabase.from("goal_snapshots").select("*").eq("user_id", userId).order("snapshot_at", { ascending: true });
-    if (error) { console.error("goal_snapshots load:", error); warnIfSchemaMissing(error, "goal history"); }
+    const { data, error } = await withRetry(() => supabase.from("goal_snapshots").select("*").eq("user_id", userId).order("snapshot_at", { ascending: true }));
+    if (error) { console.error("goal_snapshots load:", error); warnIfSchemaMissing(error, "goal history"); setLoading(false); return; }
     setSnapshots(data || []);
     setLoading(false);
   }, [userId]);
@@ -549,8 +631,8 @@ export function useBodyweight(userId) {
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
-    const { data: rows, error } = await supabase.from("bodyweight_log").select("*").eq("user_id", userId);
-    if (error) console.error("bodyweight load:", error);
+    const { data: rows, error } = await withRetry(() => supabase.from("bodyweight_log").select("*").eq("user_id", userId));
+    if (error) { console.error("bodyweight load:", error); setLoading(false); return; }
     const map = {};
     (rows || []).forEach(r => { map[r.date] = Number(r.weight); });
     setData(map);
@@ -564,15 +646,15 @@ export function useBodyweight(userId) {
     const prev = data;
     if (!w || w <= 0 || isNaN(w)) {
       setData(d => { const n = { ...d }; delete n[date]; return n; });
-      const { error } = await supabase.from("bodyweight_log").delete().eq("user_id", userId).eq("date", date);
+      const { error } = await withRetry(() => supabase.from("bodyweight_log").delete().eq("user_id", userId).eq("date", date));
       if (error) { console.error("bodyweight delete:", error); setData(prev); warnIfSchemaMissing(error, "body weight"); }
       return;
     }
     setData(d => ({ ...d, [date]: w }));
-    const { error } = await supabase.from("bodyweight_log").upsert(
+    const { error } = await withRetry(() => supabase.from("bodyweight_log").upsert(
       { user_id: userId, date, weight: w, updated_at: new Date().toISOString() },
       { onConflict: "user_id,date" }
-    );
+    ));
     if (error) { console.error("bodyweight upsert:", error); setData(prev); warnIfSchemaMissing(error, "body weight"); }
   }
 
