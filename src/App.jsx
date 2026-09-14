@@ -3246,6 +3246,20 @@ function PerfectDayCelebration({ onClose }) {
 const EXERCISE_ID_LIST = Object.keys(EXERCISES).join(", ");
 const ROONEY_TOOLS = [
   {
+    name: "query_training_history",
+    description: "Read Andrew's complete workout log: every set, rep and weight he has ever recorded. The system prompt already summarizes it (recency per muscle group, last 4 sessions per exercise, last 10 workouts). Call this when you need more than that: the full progression of a lift, older sessions, or everything done for a muscle group in a date range. It only reads, so call it freely whenever it makes your advice more specific. Filters combine; omit them all for the newest sessions overall.",
+    input_schema: {
+      type: "object",
+      properties: {
+        exercise: { type: "string", description: "Exercise id or name. An exact id like 'bench' matches only that lift; other text like 'curl' matches any exercise name containing it." },
+        muscle_group: { type: "string", description: "Chest, Back, Shoulders, Arms, Legs, Abs, PT, Full Body, Other, Cardio, or a specific muscle like Quads, Hamstrings, Glutes, Biceps, Triceps." },
+        since: { type: "string", description: "ISO date YYYY-MM-DD; only sessions on or after it." },
+        until: { type: "string", description: "ISO date YYYY-MM-DD; only sessions on or before it." },
+        limit: { type: "number", description: "Max sessions returned, newest first. Default 30." }
+      }
+    }
+  },
+  {
     name: "build_workout",
     description: "Create a workout TEMPLATE for a day — exercises pre-loaded but with EMPTY sets (no weight/reps). Use when Andrew asks you to 'set up a day', 'build me a workout', 'make a template', or recommends a session he'll do. He then opens it from Recent Workouts and fills in the weights himself as he trains. Default date is today. Pick 4-7 exercises that fit what he asked for. For each: give an ex_id from the catalog if one fits; otherwise give a name + muscle + cat and a custom exercise gets created (e.g. name 'Shoulder PT', muscle 'PT', cat 'PT'). Do NOT put in any weights or reps — leave them blank for him to log.",
     input_schema: {
@@ -3360,6 +3374,190 @@ const ROONEY_TOOLS = [
   },
 ];
 
+// ─── Rooney training digest ──────────────────────────────────────────────────
+// Rooney used to get a one-line "last workout" summary, so it couldn't say when
+// chest was last trained or what was lifted. These helpers turn the FULL
+// workout history into compact, citable text; query_training_history serves
+// the raw log on demand.
+const BARBELL_EXERCISES = new Set([
+  "bench","incline","close_grip_bench","ohp","push_press","deadlift","sumo_dl",
+  "row","pendlay_row","squat","front_squat","rdl","good_morning","hip_thrust",
+]);
+// Plates = 45s per side on a 45 lb bar: 135 → "1 plate", 225 → "2 plates",
+// 185 → "1 plate + 25/side", 95 → "bar + 25/side".
+function plateLabel(lbs) {
+  if (!(lbs >= 45)) return null;
+  if (lbs === 45) return "empty bar";
+  const perSide = (lbs - 45) / 2;
+  const plates = Math.floor(perSide / 45);
+  const rem = Math.round((perSide - plates * 45) * 10) / 10;
+  const base = plates === 0 ? "bar" : `${plates} plate${plates === 1 ? "" : "s"}`;
+  return rem ? `${base} + ${rem}/side` : base;
+}
+function exerciseName(exId, customExercises) {
+  return EXERCISES[exId] || customExercises?.[exId]?.name || exId || "Unknown exercise";
+}
+// One bucket per exercise, using the same rule as weekly muscle goals
+// (muscle belongs to the group, or the category is named like the group).
+function trainingGroupOf(exId, customExercises) {
+  const m = muscleOfEx(exId, customExercises);
+  const cat = catOfEx(exId, customExercises);
+  if (m === "Cardio" || cat === "Cardio") return "Cardio";
+  for (const [g, muscles] of Object.entries(MUSCLE_GROUPS)) {
+    if ((m && muscles.includes(m)) || cat === g) return g;
+  }
+  return "Other";
+}
+function daysBetweenIso(from, to) {
+  return Math.round((new Date(to + "T12:00:00") - new Date(from + "T12:00:00")) / 86400000);
+}
+function agoLabel(date, today) {
+  const n = daysBetweenIso(date, today);
+  if (n === 0) return "today";
+  if (n === 1) return "yesterday";
+  return n > 0 ? `${n} days ago` : `in ${-n} days`;
+}
+// Sets that were actually performed. Live sessions mark sets done; older or
+// backfilled entries may not, so fall back to any set that has reps.
+function performedSets(ex) {
+  const withReps = (ex.sets || []).filter(s => parseInt(s.reps) > 0);
+  return withReps.some(s => s.done) ? withReps.filter(s => s.done) : withReps;
+}
+// "3x10 @ 135 lb (1 plate), 1x6 @ 185 lb (1 plate + 25/side)" — identical
+// consecutive sets collapse into one run.
+function formatSets(exId, ex, sets = performedSets(ex)) {
+  const runs = [];
+  for (const s of sets) {
+    const reps = parseInt(s.reps);
+    const w = (ex.bw || isBwSet(s)) ? 0 : parseFloat(s.weight);
+    const last = runs[runs.length - 1];
+    if (last && last.reps === reps && last.w === w) last.n++;
+    else runs.push({ n: 1, reps, w });
+  }
+  return runs.map(r => {
+    if (!r.w) return `${r.n}x${r.reps} bodyweight`;
+    const pl = BARBELL_EXERCISES.has(exId) ? plateLabel(r.w) : null;
+    return `${r.n}x${r.reps} @ ${r.w} lb${pl ? ` (${pl})` : ""}`;
+  }).join(", ");
+}
+// History → sessions newest first, each keeping only exercises with performed
+// sets (an unfilled build_workout template ends up with none).
+function trainingSessions(history, customExercises) {
+  return (history || []).map(w => ({
+    date: isoDate(new Date(w.date)),
+    name: w.name || "Workout",
+    plannedCount: (w.exercises || []).length,
+    exercises: (w.exercises || []).map(ex => ({
+      exId: String(ex.exId || ""), ex, sets: performedSets(ex),
+      name: exerciseName(ex.exId, customExercises),
+      group: trainingGroupOf(ex.exId, customExercises),
+    })).filter(e => e.sets.length > 0),
+  })).sort((a, b) => b.date.localeCompare(a.date));
+}
+function sessionExerciseText(e) {
+  return e.group === "Cardio" ? `${e.name} (cardio)` : `${e.name} ${formatSets(e.exId, e.ex, e.sets)}`;
+}
+
+function buildTrainingDigest({ history, customExercises = {}, bodyweight = {}, today = isoDate() }) {
+  const allSessions = trainingSessions(history, customExercises);
+  const sessions = allSessions.filter(s => s.date <= today);
+  const lifted = sessions.filter(s => s.exercises.length > 0);
+  const out = [];
+
+  const bwDates = Object.keys(bodyweight || {}).filter(d => d <= today).sort();
+  if (bwDates.length) {
+    const lastD = bwDates[bwDates.length - 1];
+    const baseD = bwDates.find(d => d >= addDaysIso(today, -30));
+    const delta = baseD && baseD !== lastD ? Math.round((bodyweight[lastD] - bodyweight[baseD]) * 10) / 10 : null;
+    out.push(`BODY WEIGHT: ${bodyweight[lastD]} lb on ${lastD}${delta != null ? ` (${delta >= 0 ? "+" : ""}${delta} lb since ${baseD})` : ""}`);
+  }
+
+  if (lifted.length === 0) {
+    out.push("TRAINING DATA: no workouts with logged sets yet.");
+    return out.join("\n\n");
+  }
+
+  // Weekly consistency. A workout logged without set detail still counts as a
+  // training day; an unfilled template doesn't.
+  const trainedDates = new Set(sessions.filter(s => s.exercises.length > 0 || s.plannedCount === 0).map(s => s.date));
+  const perWeek = Array.from({ length: 8 }, (_, i) => getWeekDays(-i).filter(d => trainedDates.has(d)).length);
+  out.push(`TRAINING DAYS PER WEEK (this week so far first, then the 7 weeks before): ${perWeek.join(", ")}
+First workout with sets: ${lifted[lifted.length - 1].date}. Workouts with sets, all-time: ${lifted.length}.`);
+
+  // When each muscle group was last hit, across ALL history.
+  const groupNames = [...Object.keys(MUSCLE_GROUPS), "Other"];
+  const recency = [];
+  for (const g of groupNames) {
+    const hits = lifted.filter(s => s.exercises.some(e => e.group === g));
+    if (hits.length === 0) { if (g !== "Other") recency.push(`- ${g}: never logged`); continue; }
+    const last = hits[0];
+    const in28 = hits.filter(s => daysBetweenIso(s.date, today) < 28).length;
+    const what = last.exercises.filter(e => e.group === g).map(sessionExerciseText).join("; ");
+    recency.push(`- ${g}: last trained ${last.date} (${agoLabel(last.date, today)}), ${in28} session${in28 === 1 ? "" : "s"} in the last 28 days, ${hits.length} all-time. That session: ${what}`);
+  }
+  out.push(`MUSCLE GROUP RECENCY (all history):\n${recency.join("\n")}`);
+
+  // Per exercise: all-time best, then the last 4 sessions.
+  const byEx = new Map();
+  for (const s of lifted) for (const e of s.exercises) {
+    if (e.group === "Cardio") continue;
+    if (!byEx.has(e.exId)) byEx.set(e.exId, { name: e.name, group: e.group, entries: [] });
+    byEx.get(e.exId).entries.push({ date: s.date, e });
+  }
+  const exBlocks = [...byEx.entries()]
+    .sort((a, b) => groupNames.indexOf(a[1].group) - groupNames.indexOf(b[1].group) || b[1].entries[0].date.localeCompare(a[1].entries[0].date))
+    .map(([exId, info]) => {
+      let top = null, bwTop = null;
+      for (const { date, e } of info.entries) for (const s of e.sets) {
+        const reps = parseInt(s.reps);
+        if (e.ex.bw || isBwSet(s)) { if (!bwTop || reps > bwTop.reps) bwTop = { reps, date }; }
+        else {
+          const w = parseFloat(s.weight);
+          if (!top || w > top.w || (w === top.w && reps > top.reps)) top = { w, reps, date };
+        }
+      }
+      const bests = [];
+      if (top) { const pl = BARBELL_EXERCISES.has(exId) ? plateLabel(top.w) : null; bests.push(`heaviest ${top.w} lb x${top.reps}${pl ? ` (${pl})` : ""} on ${top.date}`); }
+      if (bwTop) bests.push(`most bodyweight reps in a set ${bwTop.reps} on ${bwTop.date}`);
+      const recent = info.entries.slice(0, 4).map(({ date, e }) => `    ${date} (${agoLabel(date, today)}): ${formatSets(exId, e.ex, e.sets)}`).join("\n");
+      return `- ${info.name} [${info.group}] · ${info.entries.length} session${info.entries.length === 1 ? "" : "s"} · ${bests.join(" · ")}\n${recent}`;
+    });
+  out.push(`EXERCISE LOG (every exercise ever logged: all-time best, then its last 4 sessions):\n${exBlocks.join("\n")}`);
+
+  out.push(`LAST 10 WORKOUTS (newest first):\n${lifted.slice(0, 10).map(s => `- ${s.date} (${agoLabel(s.date, today)}) "${s.name}": ${s.exercises.map(sessionExerciseText).join("; ")}`).join("\n")}`);
+
+  const planned = allSessions.filter(s => s.date >= today && s.plannedCount > 0 && s.exercises.length === 0);
+  if (planned.length) out.push(`PLANNED TEMPLATES (not filled in yet): ${planned.map(s => `${s.date} "${s.name}"`).join(", ")}`);
+
+  return out.join("\n\n");
+}
+
+// Backs the query_training_history tool: matching sessions, newest first.
+function queryTrainingHistory({ history, customExercises = {}, input = {}, today = isoDate() }) {
+  const exQ = String(input.exercise || "").toLowerCase().trim();
+  const gQ = String(input.muscle_group || "").toLowerCase().trim();
+  const limit = Math.max(1, Math.min(200, parseInt(input.limit) || 30));
+  // An exact id ("bench") means that lift only; other text matches names containing it.
+  const exactId = exQ && (EXERCISES[exQ] || customExercises?.[exQ]) ? exQ : null;
+  const matchEx = e => !exQ || (exactId ? e.exId === exactId : e.name.toLowerCase().includes(exQ) || e.exId.toLowerCase() === exQ);
+  const matchGroup = e => !gQ || e.group.toLowerCase() === gQ || String(muscleOfEx(e.exId, customExercises) || "").toLowerCase() === gQ;
+  const rows = [];
+  for (const s of trainingSessions(history, customExercises)) {
+    if (input.since && s.date < input.since) continue;
+    if (input.until && s.date > input.until) continue;
+    const hits = s.exercises.filter(e => matchEx(e) && matchGroup(e));
+    if (hits.length) rows.push(`${s.date} (${agoLabel(s.date, today)}) "${s.name}": ${hits.map(sessionExerciseText).join("; ")}`);
+  }
+  const shown = rows.slice(0, limit);
+  return {
+    count: rows.length,
+    shown: shown.length,
+    text: rows.length === 0
+      ? "No matching sessions with logged sets."
+      : `${rows.length} matching session${rows.length === 1 ? "" : "s"}${rows.length > limit ? ` (newest ${limit} shown)` : ""}:\n${shown.join("\n")}`,
+  };
+}
+
 function computeObservations({ history, dietLog, activeLog, focusSessions, goals }) {
   const gl = Array.isArray(goals) ? goals : [];
   const G = {
@@ -3438,7 +3636,7 @@ function computeObservations({ history, dietLog, activeLog, focusSessions, goals
   return obs;
 }
 
-function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log = [], goalLogs = [], customExercises = {} }) {
+function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log = [], goalLogs = [], customExercises = {}, bodyweight = {} }) {
   const today = isoDate();
   const thisWeekDays = getWeekDays(0);
 
@@ -3456,13 +3654,11 @@ function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards
     return `- ${p.label}: ${p.got}/${tgt}${p.unit} ${p.hit ? "(hit)" : "(not yet)"}`;
   }).join("\n");
 
-  const lastWorkout = history[0];
-  const totalVol = (wk) => wk.exercises.reduce((a,ex)=>a+ex.sets.reduce((b,s)=>b+(parseFloat(s.weight)||0)*(parseInt(s.reps)||0),0),0);
-
+  // Open cards per lane. (The old version looked for "Todo"/"In Progress"
+  // columns, which no longer exist, so Rooney always saw zeros.)
   const boardSummary = boards.map(b => {
-    const inProgress = b.cols.find(c => c.name.toLowerCase().includes("progress"))?.cards.length || 0;
-    const todo = b.cols.find(c => c.name.toLowerCase().includes("todo") || c.name.toLowerCase().includes("backlog"))?.cards.length || 0;
-    return `${b.name}: ${todo} to do, ${inProgress} in progress`;
+    const lanes = (b.cols || []).map(c => `${c.name} ${(c.cards || []).filter(k => !k.done && !k.recurrence).length}`).join(", ");
+    return `${b.name} (open cards): ${lanes}`;
   }).join("; ");
 
   const allTimeWorkouts = history.length;
@@ -3477,8 +3673,8 @@ ANDREW'S PROFILE:
 - Currently between roles, actively job searching (top target: Tulip Interfaces CEO office)
 - Also building Glossa, a Greek language learning app (React, Supabase, Claude API)
 - Trains at ~200 lbs, lean athletic goal
-- Key lifts: bench ~2 plates, deadlift progressing toward 3-4 plates, squat ~2-2.5 plates
-- Prefers weight in plates not total lbs when discussing lifting
+- Key lifts (self-reported a while ago; his logged numbers below win if they differ): bench ~2 plates, deadlift progressing toward 3-4 plates, squat ~2-2.5 plates
+- Talks about barbell weight in plates: 45s per side on a 45 lb bar, so 135 = 1 plate, 225 = 2 plates, 185 = 1 plate + 25s. Dumbbells, cables and machines are in lbs.
 - Learning Modern Greek (~A2 level)
 - Manchester United fan, PC gamer
 
@@ -3504,7 +3700,7 @@ THIS WEEK:
 - Diet green days: ${wkDietGreen}, red days: ${wkDietRed}
 - Active (green) days: ${wkActive}
 
-${lastWorkout ? `LAST WORKOUT: ${lastWorkout.name} on ${isoDate(new Date(lastWorkout.date))}, ${Math.round(lastWorkout.elapsed/60)} min, ${totalVol(lastWorkout).toLocaleString()} lbs volume, ${lastWorkout.exercises.length} exercises` : "LAST WORKOUT: none logged yet"}
+${buildTrainingDigest({ history, customExercises, bodyweight, today })}
 
 ALL TIME: ${allTimeWorkouts} workouts logged
 
@@ -3524,16 +3720,27 @@ ${obs.map(o => "- " + o).join("\n")}`;
 })()}
 
 YOUR ROLE:
-- Be honest and direct but warm and supportive — never sycophantic
-- Reference Andrew's actual data when relevant, don't make things up
-- Keep responses concise — this is a mobile chat, not an essay
-- You can give workout suggestions, diet nudges, focus tips, or job search encouragement
-- Use plates (not total lbs) when discussing lifting
+- Be honest and direct but warm and supportive, never sycophantic
+- Reference Andrew's actual data, don't make things up
+- Keep responses tight for a mobile chat. Tight means dense with specifics, not vague
+- You can give workout programming, diet nudges, focus tips, or job search encouragement
+- Use plates for barbell lifts, lbs for everything else
 - No em-dashes in your responses
 - Sign off occasionally as Rooney but don't overdo it
 
+HOW TO COACH TRAINING (the standard Andrew expects):
+- You can see his ENTIRE training history. MUSCLE GROUP RECENCY, EXERCISE LOG and LAST 10 WORKOUTS above cover everything he has logged, and query_training_history returns any older or more detailed sessions. Never say you can only see this week or can't see past workouts. If the summary isn't enough, call the tool before answering. If something was genuinely never logged, say so plainly.
+- Every training recommendation cites his data: the muscle group, when he last trained it (date and how long ago), exactly what he did (sets x reps @ weight, plates for barbell lifts), and how that compares to his best on that lift.
+- Then prescribe concretely: named exercises, sets x reps, and a target load (lbs, plus plates for barbell lifts) worked out from his logged numbers. The right level of detail looks like this (numbers here are made up; always use his real ones): "Chest is overdue. Your last chest day was Aug 28, 17 days ago: bench 3x10 @ 135 (1 plate), and your best is 205x5. Ease back in today with bench 5x10 @ 135-145, stopping 2-3 reps short of failure, then incline DB 3x12 @ 50s. Later this week go heavier: bench 5x5 working up toward 185 (1 plate + 25s)."
+- Layoffs: if a muscle group hasn't been trained in about 10+ days, start with a re-entry session (moderate load, roughly 60-75% of his recent working weight, higher reps, reps left in the tank), then build back to heavier sets later that week or the next session.
+- Be accurate about why: heavy sets of about 3-6 reps mainly build strength; muscle growth comes from enough hard sets (roughly 6-15 reps taken close to failure) across the week. Say which one a prescription is for.
+- Scan the log for patterns and raise them when useful: stalled lifts (same weight 3+ sessions), neglected or lopsided groups (lots of push, little pull), progression he has earned (hit every rep last time, so add 5-10 lb), and consistency from TRAINING DAYS PER WEEK.
+- Factor in his memories (injuries, preferences) and weekly goals when choosing what to train. Offer to set the session up with build_workout.
+- Numbers over adjectives. If you are about to write "focus on progressive overload", write the actual next weights instead.
+
 TOOLS YOU CAN USE:
-You have tools to mutate Andrew's data and your own memory: log_workout, log_diet, log_activity, add_kanban_card, remember, forget.
+You have tools to read his full training log (query_training_history), build workout templates (build_workout), change his data (log_workout, log_diet, log_activity, add_kanban_card), and manage your own memory (remember, forget).
+- For query_training_history: call it whenever the summary isn't enough, such as a lift's full progression or anything older than its last 4 sessions. No confirmation needed; it only reads.
 - Today's date is ${today}. When Andrew says "yesterday", "last Monday", etc., resolve to ISO YYYY-MM-DD relative to ${today}.
 - For log_workout: if Andrew gives you enough detail (exercises, sets/reps/weight), call the tool. If he's vague ("I worked out yesterday"), ASK for what he did and approximate duration before calling. Don't invent specifics.
 - For log_diet / log_activity: call directly when he describes his day.
@@ -3544,7 +3751,7 @@ You have tools to mutate Andrew's data and your own memory: log_workout, log_die
 - NEVER call a tool to delete or overwrite data without explicit confirmation. log_diet / log_activity overwrite existing values for that date, so confirm if a value is already set.`;
 }
 
-function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], goalLogs=[], customExercises={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onBuildWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
+function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], goalLogs=[], customExercises={}, bodyweight={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onBuildWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
   const GREETING = { role:"assistant", content: "Hey Andrew. I'm Rooney. I remember our past conversations and what you tell me. I can also log past workouts, diet days, activity, Zone 2, or todo cards. What's on your mind?" };
   const [messages, setMessages] = useState(() =>
     (persistedMessages && persistedMessages.length > 0) ? persistedMessages : [GREETING]
@@ -3582,6 +3789,12 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
 
   function executeTool(name, input) {
     try {
+      if (name === "query_training_history") {
+        const r = queryTrainingHistory({ history, customExercises, input });
+        const filters = [input.exercise, input.muscle_group, input.since && `since ${input.since}`, input.until && `until ${input.until}`].filter(Boolean).join(", ");
+        // Full log goes to the model; the chat chip only shows this short line.
+        return { ok: true, summary: `Read ${r.shown} of ${r.count} session${r.count === 1 ? "" : "s"}${filters ? ` (${filters})` : ""}`, content: r.text };
+      }
       if (name === "log_workout") {
         const r = onLogWorkout(input);
         return { ok: true, summary: r.summary };
@@ -3626,7 +3839,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
     setMessages(nextMsgs);
     setLoading(true);
 
-    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log, goalLogs, customExercises });
+    const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log, goalLogs, customExercises, bodyweight });
 
     // Convert displayed messages into API messages (drop UI-only fields).
     // Cap to the last 40 turns so a long thread stays affordable + within limits.
@@ -3641,9 +3854,11 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "claude-sonnet-4-5-20250929",
-            max_tokens: 1500,
-            system: systemPrompt,
+            model: "claude-opus-5",
+            max_tokens: 2000,
+            // The prompt now carries the full training digest; caching it keeps
+            // tool-use rounds and follow-up messages cheap while data is unchanged.
+            system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
             tools: ROONEY_TOOLS,
             messages: apiMessages,
           }),
@@ -3659,11 +3874,11 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
         const data = await res.json();
         const blocks = data.content || [];
         const toolUses = blocks.filter(b => b.type === "tool_use");
-        const textBlock = blocks.find(b => b.type === "text");
+        const replyText = blocks.filter(b => b.type === "text").map(b => b.text).join("\n\n").trim();
 
         if (toolUses.length === 0) {
           // Done — text response
-          const reply = textBlock?.text?.trim() || "(no reply)";
+          const reply = replyText || "(no reply)";
           setMessages(m => [...m, { role:"assistant", content: reply, toolCalls: collectedToolCalls.slice() }]);
           setLoading(false);
           return;
@@ -3677,7 +3892,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
           toolResults.push({
             type: "tool_result",
             tool_use_id: tu.id,
-            content: result.summary,
+            content: result.content ?? result.summary,
             is_error: !result.ok,
           });
         }
@@ -3696,6 +3911,7 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
   }
 
   const SUGGESTIONS = [
+    "What's most overdue to train, and what should I lift?",
     "How am I tracking this week?",
     "What should I train today given my recent workouts?",
     "I worked out yesterday — log it",
@@ -4755,6 +4971,7 @@ export default function App() {
           zone2Log={zone2Log}
           goalLogs={goalLogs}
           customExercises={customExercises}
+          bodyweight={bwState.data}
           persistedMessages={convoState.messages}
           onSaveConversation={convoState.save}
           onClearConversation={convoState.clear}
