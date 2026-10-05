@@ -159,7 +159,9 @@ function normalizeGoal(g) {
 // daily check box instead of a 3-state light, PT and Greek are daily habits.
 // Every goal carries the stamp, so the one-time migration below runs once per
 // account and never fights later edits to targets.
-const GOALS_SCHEMA_V = 2;
+// v3 re-runs the pass once more for accounts already migrated to v2, because
+// the Greek goal did not come back for everyone on the first attempt.
+const GOALS_SCHEMA_V = 3;
 const GREEK_GOAL_LABEL = "Ελληνικά";
 
 // Andrew's starting goals (editable).
@@ -567,6 +569,32 @@ function BinaryCheck({ label, emoji, checked, color = C.green, onToggle, note })
   );
 }
 
+// A minimized live workout: a persistent way back from any tab. Deliberately
+// shows no ticking clock (Andrew had workout timers removed) — just what's
+// logged so far, so it reads as "still open", not "still running".
+function ResumeWorkoutBar({ draft, maxWidth, onResume, onDiscard }) {
+  const blocks = draft.exercises || [];
+  const exCount = blocks.length;
+  const setCount = blocks.reduce((a, ex) => a + (ex.sets || []).filter(s => parseInt(s.reps) > 0).length, 0);
+  return (
+    <div style={{position:"fixed",bottom:"calc(58px + env(safe-area-inset-bottom))",left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth,zIndex:19,padding:"0 10px",boxSizing:"border-box"}}>
+      <div onClick={onResume} role="button" tabIndex={0} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" ") onResume(); }}
+        style={{display:"flex",alignItems:"center",gap:10,background:"#102029",border:`1px solid ${C.blue}66`,borderRadius:12,padding:"10px 12px",cursor:"pointer",boxShadow:"0 6px 24px rgba(0,0,0,0.5)"}}>
+        <span style={{width:8,height:8,borderRadius:"50%",background:C.blue,flexShrink:0}}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:12,color:C.text,fontFamily:MONO,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{draft.name || "Workout"} · in progress</div>
+          <div style={{fontSize:10,color:C.muted,fontFamily:MONO,marginTop:2}}>{exCount} exercise{exCount===1?"":"s"} · {setCount} set{setCount===1?"":"s"} logged · not saved yet</div>
+        </div>
+        <button onClick={e=>{e.stopPropagation(); onResume();}}
+          style={{flexShrink:0,background:C.blue,color:"#000",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:MONO}}>Resume</button>
+        <button aria-label="Discard unfinished workout" title="Discard unfinished workout"
+          onClick={e=>{e.stopPropagation(); if(window.confirm("Discard this unfinished workout? Everything logged in it will be deleted.")) onDiscard();}}
+          style={{flexShrink:0,background:"transparent",border:"none",color:C.dim,fontSize:16,cursor:"pointer",lineHeight:1,padding:"4px 2px"}}>✕</button>
+      </div>
+    </div>
+  );
+}
+
 function WeekStrip({ days, dietLog, activeLog, history }) {
   const labels="MTWTFSS";
   const workoutDays = new Set(history.map(w=>isoDate(new Date(w.date))));
@@ -809,7 +837,7 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
 
       {/* Diet & Activity — today only */}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
-        <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:12}}>TODAY'S DIET & ACTIVITY</div>
+        <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:12}}>TODAY</div>
         <div style={{display:"grid",gap:8}}>
           <BinaryCheck label="Clean diet day" emoji="🥗" checked={todayDiet==="green"}
             note={todayDiet && todayDiet!=="green" ? `was ${DIET_CONFIG[todayDiet].label.toLowerCase()}` : null}
@@ -817,6 +845,12 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
           <BinaryCheck label="Active day" emoji="👟" checked={todayActive==="green"}
             note={todayActive && todayActive!=="green" ? `was ${ACTIVE_CONFIG[todayActive].label.toLowerCase()}` : null}
             onToggle={()=>onUpdateActive(today, todayActive==="green" ? null : "green")}/>
+          {/* Daily habits (PT, Ελληνικά) check off exactly like diet and activity. */}
+          {goalList.filter(g => g.kind === "habit").map(goal => (
+            <BinaryCheck key={goal.id} label={goal.label} emoji={goal.emoji} color={goal.color}
+              checked={goalLogs.some(l => l.goal_id===goal.id && l.date===today && l.completed)}
+              onToggle={()=>onToggleGoal && onToggleGoal(goal.id)}/>
+          ))}
         </div>
       </div>
 
@@ -2619,6 +2653,12 @@ function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLo
                   <BinaryCheck label="Active day" emoji="👟" checked={active==="green"}
                     note={active && active!=="green" ? `was ${ACTIVE_CONFIG[active].label.toLowerCase()}` : null}
                     onToggle={()=>onUpdateActive(d, active==="green" ? null : "green")}/>
+                  {/* Daily habits (PT, Ελληνικά) — same check box, any past day. */}
+                  {habitGoals.filter(g => g.kind === "habit").map(goal => (
+                    <BinaryCheck key={goal.id} label={goal.label} emoji={goal.emoji} color={goal.color}
+                      checked={goalDone(goal.id, d)}
+                      onToggle={()=>onToggleGoal && onToggleGoal(goal.id, d)}/>
+                  ))}
                 </div>
 
                 {/* Body weight (one entry per day, lbs) */}
@@ -2699,27 +2739,12 @@ function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLo
                   }}>+ Log Zone 2 (e.g. 20 min bike)</button>
                 )}
 
-                {/* Habit + timed goals — backfill any past day */}
-                {habitGoals.length > 0 && (
+                {/* Timed goals — backfill minutes for any past day. Daily check
+                    boxes (PT, Ελληνικά) sit with diet and activity above. */}
+                {habitGoals.some(g => g.kind !== "habit") && (
                   <>
-                    <div style={{fontSize:9,color:C.muted,fontFamily:MONO,margin:"12px 0 6px",letterSpacing:"0.08em"}}>HABITS & SKILLS</div>
-                    {habitGoals.map(goal => {
-                      if (goal.kind === "habit") {
-                        const done = goalDone(goal.id, d);
-                        return (
-                          <button key={goal.id} onClick={()=>{ if(!done){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggleGoal && onToggleGoal(goal.id, d); }}
-                            style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",background:done?goal.color+"1a":"#161616",border:`1px solid ${done?goal.color:C.border2}`,borderRadius:8,padding:"8px 10px",marginBottom:6,cursor:"pointer",fontFamily:MONO,gap:8}}>
-                            <span style={{fontSize:12,color:C.text,display:"flex",alignItems:"center",gap:7,minWidth:0}}>
-                              <span style={{fontSize:14}}>{goal.emoji}</span>
-                              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{goal.label}</span>
-                            </span>
-                            <svg width="20" height="20" viewBox="0 0 24 24" style={{display:"block",flexShrink:0}}>
-                              <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={done?goal.color:"transparent"} stroke={done?goal.color:C.muted} strokeWidth="2"/>
-                              {done && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"/>}
-                            </svg>
-                          </button>
-                        );
-                      }
+                    <div style={{fontSize:9,color:C.muted,fontFamily:MONO,margin:"12px 0 6px",letterSpacing:"0.08em"}}>TIMED GOALS</div>
+                    {habitGoals.filter(g => g.kind !== "habit").map(goal => {
                       // timed goal — log minutes for this day
                       const key = goal.id + "|" + d;
                       const mins = goalMins(goal.id, d);
@@ -2977,7 +3002,7 @@ function WorkoutScreen({
               onClick={()=>{ if(window.confirm("Delete this workout? Cannot be undone.")) onDelete(); }}>Delete</button>
           )}
           {isLive ? (
-            <button title="Leave — your draft is saved" style={{background:"transparent",color:C.blue,border:`1px solid ${C.blue}55`,borderRadius:8,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={handleExit}>Exit</button>
+            <button title="Minimize — this workout stays open and you can come back to it from any tab" style={{background:"transparent",color:C.blue,border:`1px solid ${C.blue}55`,borderRadius:8,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={handleExit}>Minimize</button>
           ) : (
             <button style={{background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:MONO}} onClick={handleDiscard}>Cancel</button>
           )}
@@ -5117,7 +5142,14 @@ export default function App() {
     return { ok: true, summary: `Added "${input.text}" to ${targetBoard.name} > ${targetCol.name}.` };
   }
 
-  function startWorkout(exercises, name="Quick Workout"){ setWkInit({exercises,name}); setScreen("workout"); }
+  function startWorkout(exercises, name="Quick Workout"){
+    // Never silently replace a workout that's still minimized.
+    if (workoutDraft) {
+      if (!window.confirm("You have an unfinished workout minimized. Start a new one and discard it?")) return;
+      clearWorkoutDraft();
+    }
+    setWkInit({exercises,name}); setScreen("workout");
+  }
   // Resume the in-progress draft exactly where it was left off.
   function resumeDraft(){
     if (!workoutDraft) return;
@@ -5163,7 +5195,7 @@ export default function App() {
   const rooneyUI = (
     <>
       {!showRooney && (
-        <button onClick={()=>setShowRooney(true)} aria-label="Ask Rooney, your coach" title="Ask Rooney" style={{position:"fixed",bottom:78,right:16,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",zIndex:30,padding:0}}>
+        <button onClick={()=>setShowRooney(true)} aria-label="Ask Rooney, your coach" title="Ask Rooney" style={{position:"fixed",bottom:workoutDraft?142:78,right:16,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",zIndex:30,padding:0}}>
           <span style={{width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#000",fontFamily:"monospace",boxShadow:"0 4px 20px rgba(255,107,53,0.35)"}}>R</span>
           <span style={{fontSize:8,color:C.muted,fontFamily:MONO,letterSpacing:"0.1em",background:C.bg,padding:"1px 5px",borderRadius:6}}>ROONEY</span>
         </button>
@@ -5296,7 +5328,7 @@ export default function App() {
       </div>
 
       {/* Content */}
-      <div style={{paddingBottom:80}}>
+      <div style={{paddingBottom:workoutDraft?142:80}}>
         {tab==="home"  && <HomeTab  history={history} dietLog={dietLog} activeLog={activeLog} focusSessions={focusSessions} zone2Log={zone2Log} goalLogs={goalLogs} customExercises={customExercises} todayTasks={todayTasks} onToggleTask={toggleTask} onAddTask={addTask} onUpdateTask={updateTask} onUpdateDiet={updateDiet} onUpdateActive={updateActive} onToggleGoal={toggleGoalToday} onSetGoalMinutes={setGoalMinutes} onGoTo={setTab} onOpenEdit={openEditWorkout} onClearAll={clearAll} onSignOut={auth.signOut} userEmail={auth.user?.email} onUpdatePassword={auth.updatePassword} goals={goalList} onEditGoals={()=>setShowGoalsEditor(true)}/>}
         {tab==="iron"  && <>
           <IronTab  history={history} onStartWorkout={startWorkout} draft={workoutDraft} onResumeDraft={resumeDraft} onDiscardDraft={clearWorkoutDraft}/>
@@ -5334,6 +5366,11 @@ export default function App() {
 
       {showPerfectDay && <PerfectDayCelebration onClose={()=>setShowPerfectDay(false)}/>}
       {previewPR && <PRCelebration pr={previewPR} onClose={()=>setPreviewPR(null)}/>}
+
+      {/* Minimized workout — resume it from any tab */}
+      {workoutDraft && (
+        <ResumeWorkoutBar draft={workoutDraft} maxWidth={shellMax} onResume={resumeDraft} onDiscard={clearWorkoutDraft}/>
+      )}
 
       {/* Bottom nav */}
       <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:shellMax,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",zIndex:20,paddingBottom:"env(safe-area-inset-bottom)",transition:"max-width 0.25s ease"}}>
