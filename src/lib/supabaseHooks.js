@@ -491,6 +491,11 @@ export function useZone2Log(userId) {
 export function useSettings(userId, defaultGoals) {
   const [goals, setGoalsState] = useState(defaultGoals);
   const [loading, setLoading] = useState(true);
+  // `loaded` means THIS user's settings actually came back from the server.
+  // `loading` alone is not enough: it flips to false while userId is still null
+  // (signed out, or auth still resolving), so a consumer that only checks
+  // `loading` can act on the built-in defaults and think they're real data.
+  const [loadedFor, setLoadedFor] = useState(null);
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
@@ -504,6 +509,7 @@ export function useSettings(userId, defaultGoals) {
       supabase.from("user_settings").upsert({ user_id: userId, goals: defaultGoals, updated_at: new Date().toISOString() }).then(()=>{});
       setGoalsState(defaultGoals);
     }
+    setLoadedFor(userId);
     setLoading(false);
   }, [userId, defaultGoals]);
   useEffect(() => { refresh(); }, [refresh]);
@@ -512,9 +518,10 @@ export function useSettings(userId, defaultGoals) {
     setGoalsState(next);
     const { error } = await withRetry(() => supabase.from("user_settings").upsert({ user_id: userId, goals: next, updated_at: new Date().toISOString() }));
     if (error) console.error("settings save:", error);
+    return { error };
   }
 
-  return { goals, loading, setGoals, refresh };
+  return { goals, loading, loaded: !!userId && loadedFor === userId, setGoals, refresh };
 }
 
 // ─── ROONEY CONVERSATION (persisted chat thread) ──────────────────────────────
@@ -555,12 +562,14 @@ export function useRooneyConversation(userId) {
 export function useGoalLogs(userId) {
   const [data, setData] = useState([]); // [{goal_id, date, completed, value}]
   const [loading, setLoading] = useState(true);
+  const [loadedFor, setLoadedFor] = useState(null); // see useSettings: real data arrived
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
     const { data: rows, error } = await withRetry(() => supabase.from("goal_logs").select("*").eq("user_id", userId));
     if (error) { console.error("goal_logs load:", error); setLoading(false); return; }
     setData(rows || []);
+    setLoadedFor(userId);
     setLoading(false);
   }, [userId]);
   useEffect(() => { refresh(); }, [refresh]);
@@ -596,19 +605,21 @@ export function useGoalLogs(userId) {
     if (error) { console.error("goal_log value:", error); setData(prev); warnIfSchemaMissing(error, "timed goal minutes"); }
   }
 
-  return { data, loading, toggle, setValue, refresh };
+  return { data, loading, loaded: !!userId && loadedFor === userId, toggle, setValue, refresh };
 }
 
 // ─── GOAL SNAPSHOTS (timestamped audit trail so past heatmap cells stay honest)
 export function useGoalSnapshots(userId) {
   const [snapshots, setSnapshots] = useState([]); // [{ user_id, snapshot_at, goals }, ...] ascending
   const [loading, setLoading] = useState(true);
+  const [loadedFor, setLoadedFor] = useState(null); // see useSettings: real data arrived
 
   const refresh = useCallback(async () => {
     if (!userId) { setLoading(false); return; }
     const { data, error } = await withRetry(() => supabase.from("goal_snapshots").select("*").eq("user_id", userId).order("snapshot_at", { ascending: true }));
     if (error) { console.error("goal_snapshots load:", error); warnIfSchemaMissing(error, "goal history"); setLoading(false); return; }
     setSnapshots(data || []);
+    setLoadedFor(userId);
     setLoading(false);
   }, [userId]);
   useEffect(() => { refresh(); }, [refresh]);
@@ -621,7 +632,7 @@ export function useGoalSnapshots(userId) {
     if (error) { console.error("goal_snapshots insert:", error); warnIfSchemaMissing(error, "goal history"); }
   }
 
-  return { snapshots, loading, saveSnapshot, refresh };
+  return { snapshots, loading, loaded: !!userId && loadedFor === userId, saveSnapshot, refresh };
 }
 
 // ─── BODY WEIGHT (one measurement per day, in lbs) ────────────────────────────

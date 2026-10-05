@@ -4733,14 +4733,23 @@ export default function App() {
   const goalsMigratedRef = useRef(false);
   useEffect(() => {
     if (!userId || goalsMigratedRef.current) return;
-    if (settingsState.loading || goalLogsState.loading || goalSnapsState.loading) return;
+    // Wait for `loaded`, NOT `loading`. Every hook flips loading to false while
+    // userId is still null, so checking loading ran this against the built-in
+    // defaults (already stamped current) and then marked itself done — which is
+    // why the restored goals never appeared.
+    if (!settingsState.loaded || !goalLogsState.loaded || !goalSnapsState.loaded) return;
     const next = migrateGoalsToBinary(settingsState.goals, {
       goalLogs: goalLogsState.data,
       snapshots: goalSnapsState.snapshots,
     });
-    goalsMigratedRef.current = true;
-    if (next) setGoalList(next);
-  }, [userId, settingsState.loading, settingsState.goals, goalLogsState.loading, goalSnapsState.loading]);
+    goalsMigratedRef.current = true;   // claim it now so a re-render can't double-write
+    if (!next) return;
+    (async () => {
+      const { error } = (await settingsState.setGoals(next)) || {};
+      if (error) { goalsMigratedRef.current = false; return; }  // let a later pass retry
+      goalSnapsState.saveSnapshot(next);
+    })();
+  }, [userId, settingsState.loaded, settingsState.goals, goalLogsState.loaded, goalSnapsState.loaded]);
   const zone2Log = zone2State.data;
   const goalLogs = goalLogsState.data;
 
