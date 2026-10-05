@@ -155,18 +155,86 @@ function normalizeGoal(g) {
   };
 }
 
+// Goal-list schema version. v2 = binary model: diet and activity are a single
+// daily check box instead of a 3-state light, PT and Greek are daily habits.
+// Every goal carries the stamp, so the one-time migration below runs once per
+// account and never fights later edits to targets.
+const GOALS_SCHEMA_V = 2;
+const GREEK_GOAL_LABEL = "Ελληνικά";
+
 // Andrew's starting goals (editable).
 const DEFAULT_GOAL_LIST = [
-  { id: "g_chest",  kind: "muscle", group: "Chest",     target: 1, label: "Chest" },
-  { id: "g_back",   kind: "muscle", group: "Back",      target: 1, label: "Back" },
-  { id: "g_legs",   kind: "muscle", group: "Legs",      target: 1, label: "Legs" },
-  { id: "g_abs",    kind: "muscle", group: "Abs",       target: 2, label: "Abs" },
-  { id: "g_sh",     kind: "muscle", group: "Shoulders", target: 1, label: "Shoulders" },
-  { id: "g_pt",     kind: "muscle", group: "PT",        target: 1, label: "PT" },
-  { id: "g_z2",     kind: "zone2",  target: 60, label: "Zone 2" },
-  { id: "g_diet",   kind: "diet_green",   target: 4, label: "Clean diet days" },
-  { id: "g_active", kind: "active_green", target: 4, label: "Active days" },
+  { id: "g_chest",  kind: "muscle", group: "Chest",     target: 1, label: "Chest", v: GOALS_SCHEMA_V },
+  { id: "g_back",   kind: "muscle", group: "Back",      target: 1, label: "Back", v: GOALS_SCHEMA_V },
+  { id: "g_legs",   kind: "muscle", group: "Legs",      target: 1, label: "Legs", v: GOALS_SCHEMA_V },
+  { id: "g_abs",    kind: "muscle", group: "Abs",       target: 2, label: "Abs", v: GOALS_SCHEMA_V },
+  { id: "g_sh",     kind: "muscle", group: "Shoulders", target: 1, label: "Shoulders", v: GOALS_SCHEMA_V },
+  { id: "g_pt",     kind: "habit",  target: 6, label: "PT", emoji: "🩹", countsMuscleGroup: "PT", v: GOALS_SCHEMA_V },
+  { id: "g_greek",  kind: "habit",  target: 3, label: GREEK_GOAL_LABEL, emoji: "🇬🇷", v: GOALS_SCHEMA_V },
+  { id: "g_z2",     kind: "zone2",  target: 60, label: "Zone 2", v: GOALS_SCHEMA_V },
+  { id: "g_diet",   kind: "diet_green",   target: 2, label: "Clean diet day", v: GOALS_SCHEMA_V },
+  { id: "g_active", kind: "active_green", target: 4, label: "Active day", v: GOALS_SCHEMA_V },
 ];
+
+function isGreekGoal(g) {
+  return /ελλην|greek|ellinika/i.test(`${g?.label || ""} ${g?.id || ""}`);
+}
+// One-time per-account move to the binary model. Returns the new goal list, or
+// null when nothing needs doing (any goal already stamped v2).
+//
+// NOTHING IS DELETED OR REWRITTEN: diet_log / activity_log keep every green,
+// yellow and red day they already hold (the check box just reads and writes the
+// "green" value), PT keeps counting the workouts already logged via
+// countsMuscleGroup, and a Greek goal that went missing is restored on its
+// ORIGINAL id so the days logged against it come back with it.
+function migrateGoalsToBinary(goals, { goalLogs = [], snapshots = [] } = {}) {
+  const list = (Array.isArray(goals) ? goals : []).map(g => ({ ...g }));
+  if (list.some(g => Number(g.v) >= GOALS_SCHEMA_V)) return null;
+
+  const diet = list.find(g => g.kind === "diet_green");
+  if (diet) { diet.target = 2; diet.label = "Clean diet day"; }
+  else list.push({ id: "g_diet", kind: "diet_green", target: 2, label: "Clean diet day" });
+
+  const active = list.find(g => g.kind === "active_green");
+  if (active) { active.target = 4; active.label = "Active day"; }
+  else list.push({ id: "g_active", kind: "active_green", target: 4, label: "Active day" });
+
+  // PT: workout-derived goal → daily check box that still counts PT workouts.
+  const pt = list.find(g => g.group === "PT" || g.id === "g_pt" || /^pt$/i.test(g.label || ""));
+  if (pt) {
+    pt.kind = "habit"; pt.target = 6; pt.label = pt.label || "PT";
+    pt.emoji = pt.emoji || "🩹"; pt.countsMuscleGroup = "PT"; pt.active = true;
+    delete pt.group;
+  } else {
+    list.push({ id: "g_pt", kind: "habit", target: 6, label: "PT", emoji: "🩹", countsMuscleGroup: "PT" });
+  }
+
+  // Greek: restore it if it went missing, reusing the id its logged days belong
+  // to. Snapshot evidence wins; otherwise adopt an orphaned id only when
+  // there's exactly one, so unrelated logs can't be swept up by mistake.
+  let greek = list.find(isGreekGoal);
+  if (!greek) {
+    const known = new Set(list.map(g => g.id));
+    const fromSnapshot = [...snapshots].reverse()
+      .flatMap(s => (Array.isArray(s.goals) ? s.goals : []))
+      .find(g => isGreekGoal(g));
+    const orphanIds = [...new Set(goalLogs.map(l => l.goal_id).filter(id => !known.has(id)))];
+    const snapId = fromSnapshot?.id;
+    const id = (snapId && orphanIds.includes(snapId)) ? snapId
+      : orphanIds.length === 1 ? orphanIds[0]
+      : snapId || "g_greek";
+    greek = { ...(fromSnapshot || {}), id };
+    list.push(greek);
+  }
+  greek.kind = "habit";
+  greek.label = GREEK_GOAL_LABEL;
+  greek.target = 3;
+  greek.emoji = (greek.emoji && greek.emoji !== "✅") ? greek.emoji : "🇬🇷";
+  greek.active = true;
+  delete greek.group;
+
+  return list.map(g => ({ ...g, v: GOALS_SCHEMA_V }));
+}
 
 function muscleOfEx(exId, customExercises) {
   return EX_META[exId]?.muscle || customExercises?.[exId]?.muscle || null;
@@ -212,7 +280,23 @@ function computeGoalProgress(goal, ctx) {
     got = days.size;
   } else if (goal.kind === "habit") {
     // Generic daily checkbox habit — count logged completions this week.
-    got = goalLogs.filter(l => l.goal_id === goal.id && weekSet.has(l.date) && l.completed).length;
+    const days = new Set(goalLogs.filter(l => l.goal_id === goal.id && weekSet.has(l.date) && l.completed).map(l => l.date));
+    // A habit can ALSO be satisfied by training that muscle group. PT moved
+    // from a workout goal to a daily checkbox, and this keeps every PT day
+    // already logged as a workout counting, with no data copied around.
+    if (goal.countsMuscleGroup) {
+      const muscles = MUSCLE_GROUPS[goal.countsMuscleGroup] || [];
+      for (const w of history) {
+        const d = isoDate(new Date(w.date));
+        if (!weekSet.has(d) || days.has(d)) continue;
+        for (const ex of (w.exercises || [])) {
+          const m = muscleOfEx(ex.exId, customExercises);
+          const cat = catOfEx(ex.exId, customExercises);
+          if ((m && muscles.includes(m)) || cat === goal.countsMuscleGroup) { days.add(d); break; }
+        }
+      }
+    }
+    got = days.size;
   } else if (goal.kind === "timed") {
     // Generic minutes goal — sum logged minutes this week.
     got = goalLogs.filter(l => l.goal_id === goal.id && weekSet.has(l.date)).reduce((a, l) => a + (l.value || 0), 0);
@@ -462,6 +546,27 @@ function TrafficLight({ config, value, onChange, size="md" }) {
   );
 }
 
+// Single daily check box — the binary replacement for the 3-state traffic
+// light. Checked means the day counts; unchecked means it doesn't. Days that
+// were logged yellow or red before the switch stay in the database untouched
+// and show their old value as a note.
+function BinaryCheck({ label, emoji, checked, color = C.green, onToggle, note }) {
+  return (
+    <button onClick={()=>{ if(!checked){try{if(navigator.vibrate)navigator.vibrate(15);}catch{}} onToggle(); }}
+      style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",background:checked?color+"1a":"#161616",border:`1px solid ${checked?color:C.border2}`,borderRadius:10,padding:"10px 12px",cursor:"pointer",fontFamily:MONO,gap:8}}>
+      <span style={{fontSize:12,color:C.text,display:"flex",alignItems:"center",gap:7,minWidth:0}}>
+        {emoji && <span style={{fontSize:14}}>{emoji}</span>}
+        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label}</span>
+        {note && <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>{note}</span>}
+      </span>
+      <svg width="20" height="20" viewBox="0 0 24 24" style={{display:"block",flexShrink:0}}>
+        <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill={checked?color:"transparent"} stroke={checked?color:C.muted} strokeWidth="2"/>
+        {checked && <path d="M7 12.5 l3.3 3.3 l6.7 -7" fill="none" stroke="#000" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"/>}
+      </svg>
+    </button>
+  );
+}
+
 function WeekStrip({ days, dietLog, activeLog, history }) {
   const labels="MTWTFSS";
   const workoutDays = new Set(history.map(w=>isoDate(new Date(w.date))));
@@ -705,9 +810,13 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
       {/* Diet & Activity — today only */}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
         <div style={{fontSize:10,color:C.dim,fontFamily:MONO,letterSpacing:"0.1em",marginBottom:12}}>TODAY'S DIET & ACTIVITY</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-          <div><div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:8}}>DIET</div><TrafficLight config={DIET_CONFIG} value={todayDiet} onChange={v=>onUpdateDiet(today,v)}/></div>
-          <div><div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:8}}>ACTIVITY</div><TrafficLight config={ACTIVE_CONFIG} value={todayActive} onChange={v=>onUpdateActive(today,v)}/></div>
+        <div style={{display:"grid",gap:8}}>
+          <BinaryCheck label="Clean diet day" emoji="🥗" checked={todayDiet==="green"}
+            note={todayDiet && todayDiet!=="green" ? `was ${DIET_CONFIG[todayDiet].label.toLowerCase()}` : null}
+            onToggle={()=>onUpdateDiet(today, todayDiet==="green" ? null : "green")}/>
+          <BinaryCheck label="Active day" emoji="👟" checked={todayActive==="green"}
+            note={todayActive && todayActive!=="green" ? `was ${ACTIVE_CONFIG[todayActive].label.toLowerCase()}` : null}
+            onToggle={()=>onUpdateActive(today, todayActive==="green" ? null : "green")}/>
         </div>
       </div>
 
@@ -734,9 +843,19 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
               const color = p.hit ? C.green : over ? C.red : goal.color;
               const pct = Math.min(p.got/Math.max(p.target,1),1)*100;
               const tgt = p.type==="max" ? `≤${p.target}${p.unit}` : `${p.target}${p.unit}`;
-              // Generic habit / timed goals are logged right here from Home.
-              const loggable = goal.kind === "habit" || goal.kind === "timed";
-              const todayDone = goalLogs.some(l => l.goal_id===goal.id && l.date===today && l.completed);
+              // Generic habit / timed goals are logged right here from Home, and
+              // so are the binary diet / activity goals (they write the same
+              // "green" day their check box on this page writes).
+              const dailyKind = goal.kind === "diet_green" ? "diet" : goal.kind === "active_green" ? "active" : null;
+              const loggable = goal.kind === "habit" || goal.kind === "timed" || !!dailyKind;
+              const todayDone = dailyKind
+                ? (dailyKind === "diet" ? todayDiet : todayActive) === "green"
+                : goalLogs.some(l => l.goal_id===goal.id && l.date===today && l.completed);
+              const toggleToday =
+                dailyKind === "diet"   ? () => onUpdateDiet(today, todayDone ? null : "green")
+                : dailyKind === "active" ? () => onUpdateActive(today, todayDone ? null : "green")
+                : (goal.kind === "habit" && onToggleGoal) ? () => onToggleGoal(goal.id)
+                : null;
               const todayMins = goalLogs.find(l => l.goal_id===goal.id && l.date===today)?.value || 0;
               const editing = minsEditGoal === goal.id;
               return (
@@ -747,8 +866,8 @@ function HomeTab({ history, dietLog, activeLog, focusSessions, zone2Log = [], go
                       <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.label}</span>
                     </span>
                     <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-                      {loggable && goal.kind==="habit" && onToggleGoal && (
-                        <button onClick={()=>onToggleGoal(goal.id)} title="Log today"
+                      {loggable && toggleToday && (
+                        <button onClick={toggleToday} title="Log today"
                           style={{background:todayDone?goal.color+"22":"transparent",border:`1px solid ${todayDone?goal.color:C.border2}`,borderRadius:7,color:todayDone?goal.color:C.muted,fontSize:10.5,fontFamily:MONO,padding:"4px 9px",cursor:"pointer"}}>
                           {todayDone ? "✓ today" : "+ today"}
                         </button>
@@ -2493,15 +2612,13 @@ function LogTab({ history, dietLog, activeLog, zone2Log = [], goals = [], goalLo
 
             {!isFuture && (
               <>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-                  <div>
-                    <div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:5,letterSpacing:"0.08em"}}>DIET</div>
-                    <TrafficLight config={DIET_CONFIG} value={diet} onChange={v=>onUpdateDiet(d,v)} size="sm"/>
-                  </div>
-                  <div>
-                    <div style={{fontSize:9,color:C.muted,fontFamily:MONO,marginBottom:5,letterSpacing:"0.08em"}}>ACTIVITY</div>
-                    <TrafficLight config={ACTIVE_CONFIG} value={active} onChange={v=>onUpdateActive(d,v)} size="sm"/>
-                  </div>
+                <div style={{display:"grid",gap:6,marginBottom:12}}>
+                  <BinaryCheck label="Clean diet day" emoji="🥗" checked={diet==="green"}
+                    note={diet && diet!=="green" ? `was ${DIET_CONFIG[diet].label.toLowerCase()}` : null}
+                    onToggle={()=>onUpdateDiet(d, diet==="green" ? null : "green")}/>
+                  <BinaryCheck label="Active day" emoji="👟" checked={active==="green"}
+                    note={active && active!=="green" ? `was ${ACTIVE_CONFIG[active].label.toLowerCase()}` : null}
+                    onToggle={()=>onUpdateActive(d, active==="green" ? null : "green")}/>
                 </div>
 
                 {/* Body weight (one entry per day, lbs) */}
@@ -3380,6 +3497,14 @@ const ROONEY_TOOLS = [
 // chest was last trained or what was lifted. These helpers turn the FULL
 // workout history into compact, citable text; query_training_history serves
 // the raw log on demand.
+// High-value compounds — the lifts worth prioritising when suggesting
+// something he has never tried. Marked with * in the digest's rotation list.
+const HIGH_VALUE_EXERCISES = new Set([
+  "bench","incline","db_bench","incline_db","ohp","db_ohp","push_press","dip","close_grip_bench",
+  "deadlift","trap_bar_dl","rdl","row","pendlay_row","t_bar_row","db_row","cable_row","lat","pullup","chinup","face_pull",
+  "squat","front_squat","hack_squat","leg_press","bulgarian","lunge","hip_thrust","leg_curl","nordic","calf_raise",
+  "farmers","hanging_leg","ab_wheel",
+]);
 const BARBELL_EXERCISES = new Set([
   "bench","incline","close_grip_bench","ohp","push_press","deadlift","sumo_dl",
   "row","pendlay_row","squat","front_squat","rdl","good_morning","hip_thrust",
@@ -3524,6 +3649,45 @@ First workout with sets: ${lifted[lifted.length - 1].date}. Workouts with sets, 
       return `- ${info.name} [${info.group}] · ${info.entries.length} session${info.entries.length === 1 ? "" : "s"} · ${bests.join(" · ")}\n${recent}`;
     });
   out.push(`EXERCISE LOG (every exercise ever logged: all-time best, then its last 4 sessions):\n${exBlocks.join("\n")}`);
+
+  // Where each lift is actually going: top set over time, and where it stalled.
+  const stallLines = [];
+  for (const [exId, info] of byEx.entries()) {
+    const chrono = [...info.entries].reverse(); // oldest first
+    const tops = chrono.map(({ date, e }) => {
+      let w = 0, reps = 0;
+      for (const s of e.sets) {
+        const r = parseInt(s.reps);
+        if (e.ex.bw || isBwSet(s)) { if (r > reps) reps = r; }
+        else { const x = parseFloat(s.weight); if (x > w) w = x; }
+      }
+      return { date, w, reps };
+    });
+    const weighted = tops.filter(t => t.w > 0);
+    const useWeight = weighted.length >= 2;
+    const series = useWeight ? weighted : tops.filter(t => t.reps > 0);
+    if (series.length < 2) continue;
+    const val = (t) => useWeight ? t.w : t.reps;
+    const unit = useWeight ? " lb" : " reps";
+    let best = 0, bestIdx = 0;
+    series.forEach((t, i) => { if (val(t) >= best) { best = val(t); bestIdx = i; } });
+    const sessionsSince = series.length - 1 - bestIdx;
+    const daysSince = daysBetweenIso(series[bestIdx].date, today);
+    const stalled = sessionsSince >= 2 && daysSince >= 21;
+    stallLines.push(`- ${info.name} [${info.group}]: ${val(series[0])}${unit} → ${val(series[series.length - 1])}${unit} across ${series.length} sessions · best ${best}${unit} on ${series[bestIdx].date} (${daysSince} days and ${sessionsSince} session${sessionsSince === 1 ? "" : "s"} ago)${stalled ? " · STALLED" : ""}`);
+  }
+  if (stallLines.length) out.push(`PROGRESSION PER EXERCISE (first → latest top set; STALLED = no new best in 3+ weeks and 2+ sessions):\n${stallLines.join("\n")}`);
+
+  // What he has never tried, so rotation ideas are real options, not guesses.
+  const loggedIds = new Set(byEx.keys());
+  const neverByMuscle = {};
+  for (const id of Object.keys(EXERCISES)) {
+    if (loggedIds.has(id) || EX_META[id]?.cat === "Cardio") continue;
+    const m = EX_META[id]?.muscle || "Other";
+    (neverByMuscle[m] ||= []).push(`${EXERCISES[id]}${HIGH_VALUE_EXERCISES.has(id) ? "*" : ""}`);
+  }
+  const neverLines = Object.entries(neverByMuscle).map(([m, names]) => `- ${m}: ${names.join(", ")}`);
+  if (neverLines.length) out.push(`NEVER LOGGED — rotation candidates from his exercise catalog (* = high-value compound):\n${neverLines.join("\n")}`);
 
   out.push(`LAST 10 WORKOUTS (newest first):\n${lifted.slice(0, 10).map(s => `- ${s.date} (${agoLabel(s.date, today)}) "${s.name}": ${s.exercises.map(sessionExerciseText).join("; ")}`).join("\n")}`);
 
@@ -3738,6 +3902,9 @@ HOW TO COACH TRAINING (the standard Andrew expects):
 - Scan the log for patterns and raise them when useful: stalled lifts (same weight 3+ sessions), neglected or lopsided groups (lots of push, little pull), progression he has earned (hit every rep last time, so add 5-10 lb), and consistency from TRAINING DAYS PER WEEK.
 - Factor in his memories (injuries, preferences) and weekly goals when choosing what to train. Offer to set the session up with build_workout.
 - Numbers over adjectives. If you are about to write "focus on progressive overload", write the actual next weights instead.
+- PROGRESSION PER EXERCISE is your stall detector. Call out lifts by name and number when they have not moved ("squat has sat at 2 plates for 5 weeks and 4 sessions"), and name the ones still climbing so he knows what is working. A lift he trains constantly whose top set never moves is diminishing returns: say so and change the stimulus (different rep range, tempo, or a swap), don't just tell him to add weight.
+- NEVER LOGGED lists exercises from his catalog he has genuinely never done, with * for high-value compounds. Use it for rotation suggestions, say what it would replace and what it covers that his current work doesn't, and never suggest something as "new" that already appears in his EXERCISE LOG.
+- This chat thread can be weeks or months old. Everything above is current as of ${today}. Never repeat an older claim from earlier in the thread about what you can or cannot see, and never treat a date in an old message as today.
 
 TOOLS YOU CAN USE:
 You have tools to read his full training log (query_training_history), build workout templates (build_workout), change his data (log_workout, log_diet, log_activity, add_kanban_card), and manage your own memory (remember, forget).
@@ -4534,6 +4701,21 @@ export default function App() {
     await settingsState.setGoals(nextGoals);
     goalSnapsState.saveSnapshot(nextGoals);
   }
+  // One-time move to the binary goal model (see migrateGoalsToBinary). Waits
+  // for settings, goal logs AND snapshots so a Greek goal that went missing is
+  // restored on the id its logged days belong to. Runs once per account: the
+  // new list is stamped v2, so later target edits are never overwritten.
+  const goalsMigratedRef = useRef(false);
+  useEffect(() => {
+    if (!userId || goalsMigratedRef.current) return;
+    if (settingsState.loading || goalLogsState.loading || goalSnapsState.loading) return;
+    const next = migrateGoalsToBinary(settingsState.goals, {
+      goalLogs: goalLogsState.data,
+      snapshots: goalSnapsState.snapshots,
+    });
+    goalsMigratedRef.current = true;
+    if (next) setGoalList(next);
+  }, [userId, settingsState.loading, settingsState.goals, goalLogsState.loading, goalSnapsState.loading]);
   const zone2Log = zone2State.data;
   const goalLogs = goalLogsState.data;
 
