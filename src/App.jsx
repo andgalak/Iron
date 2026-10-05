@@ -3849,11 +3849,23 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
     const collectedToolCalls = [];
 
     try {
+      // The /api/rooney proxy only answers signed-in users, so every call
+      // carries this session's Supabase access token. Without it the proxy
+      // replies 401 and the error surfaces in the thread like any other.
+      let accessToken = "";
+      try {
+        const { data } = await supabase.auth.getSession();
+        accessToken = data?.session?.access_token || "";
+      } catch {}
+
       // Tool-use loop: keep calling API until we get a normal text response
       for (let turn = 0; turn < 6; turn++) {
         const res = await fetch("/api/rooney", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          },
           body: JSON.stringify({
             model: "claude-opus-5",
             max_tokens: 2000,
