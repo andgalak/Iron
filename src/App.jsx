@@ -2313,13 +2313,21 @@ function TrendsTab({ history, dietLog, activeLog, zone2Log = [], focusSessions =
   function goalsAsOf(d) {
     const snaps = Array.isArray(goalSnapshots) ? goalSnapshots : [];
     if (snaps.length === 0) return goalListNorm;
+    const usable = (s) => {
+      const g = (Array.isArray(s?.goals) ? s.goals : []).map(normalizeGoal).filter(x => x.active !== false);
+      return g.length ? g : null;
+    };
     const endOfDay = new Date(d + "T23:59:59.999").toISOString();
-    let picked = null;
-    for (const s of snaps) if (s.snapshot_at <= endOfDay) picked = s;
-    // Before the earliest snapshot, use the earliest one (best proxy — a day
-    // before we tracked history probably had the same goals as when we started).
-    if (!picked) picked = snaps[0];
-    return (Array.isArray(picked.goals) ? picked.goals : []).map(normalizeGoal).filter(g => g.active !== false);
+    let idx = -1;
+    for (let i = 0; i < snaps.length; i++) if (snaps[i].snapshot_at <= endOfDay) idx = i;
+    // Walk back to the most recent snapshot that actually HAS goals. An empty
+    // snapshot is an artifact of a failed save, never a real statement that
+    // you had no goals that day — treating it as one turned the day black.
+    for (let i = idx; i >= 0; i--) { const g = usable(snaps[i]); if (g) return g; }
+    // Before the earliest usable snapshot, use the earliest one (best proxy — a
+    // day before we tracked history probably had the goals we started with).
+    for (const s of snaps) { const g = usable(s); if (g) return g; }
+    return goalListNorm;
   }
   // Returns -1 future, -2 no goals, -3 no data in the trailing week, or 0–100.
   // The score is % of ACTIVE-AT-THAT-TIME weekly goals that were hit over
@@ -3386,6 +3394,9 @@ function PerfectDayCelebration({ onClose }) {
 
 // ─── ROONEY CHAT ─────────────────────────────────────────────────────────────
 // ─── Rooney tools ─────────────────────────────────────────────────────────────
+// Current Opus. Keep this in step with ALLOWED_MODELS in api/rooney.js, which
+// pins server-side what the proxy will forward.
+const ROONEY_MODEL = "claude-opus-5-5";
 const EXERCISE_ID_LIST = Object.keys(EXERCISES).join(", ");
 const ROONEY_TOOLS = [
   {
@@ -4048,7 +4059,18 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
       try {
         const { data } = await supabase.auth.getSession();
         accessToken = data?.session?.access_token || "";
+        // An installed PWA can sit for days on a session restored from storage;
+        // refresh once rather than letting the proxy bounce it with a 401.
+        if (!accessToken) {
+          const { data: refreshed } = await supabase.auth.refreshSession();
+          accessToken = refreshed?.session?.access_token || "";
+        }
       } catch {}
+      if (!accessToken) {
+        setMessages(m => [...m, { role:"assistant", content: "You're signed out, so I can't get to your data right now. Refresh the app or sign in again, then ask me once more." }]);
+        setLoading(false);
+        return;
+      }
 
       // Tool-use loop: keep calling API until we get a normal text response
       for (let turn = 0; turn < 6; turn++) {
@@ -4059,8 +4081,12 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
             ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
           },
           body: JSON.stringify({
-            model: "claude-opus-5",
-            max_tokens: 2000,
+            model: ROONEY_MODEL,
+            // Opus runs adaptive thinking by default. At 2000 tokens the
+            // reasoning could eat the whole budget and leave no answer, so give
+            // it room and keep effort low: this is a phone chat, not research.
+            max_tokens: 4000,
+            output_config: { effort: "low" },
             // The prompt now carries the full training digest; caching it keeps
             // tool-use rounds and follow-up messages cheap while data is unchanged.
             system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
@@ -4070,8 +4096,19 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
         });
 
         if (!res.ok) {
-          const errBody = await res.text();
-          setMessages(m => [...m, { role:"assistant", content: `API error ${res.status}: ${errBody.slice(0,300)}` }]);
+          // The proxy answers {error: "..."} and Anthropic {error:{message}}.
+          // Pull the sentence out of either instead of dumping raw JSON.
+          const raw = await res.text();
+          let detail = raw.slice(0, 300);
+          try {
+            const j = JSON.parse(raw);
+            detail = (typeof j.error === "string" ? j.error : j.error?.message) || detail;
+          } catch {}
+          const friendly =
+            res.status === 401 ? "Your sign-in expired. Refresh the app or sign in again, then ask me once more."
+            : (res.status === 504 || res.status === 408 || res.status === 524) ? "That took too long and timed out before I could answer. Ask again, or narrow it down to one lift or muscle group."
+            : `Something went wrong (${res.status}). ${detail}`;
+          setMessages(m => [...m, { role:"assistant", content: friendly }]);
           setLoading(false);
           return;
         }
@@ -4082,8 +4119,11 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
         const replyText = blocks.filter(b => b.type === "text").map(b => b.text).join("\n\n").trim();
 
         if (toolUses.length === 0) {
-          // Done — text response
-          const reply = replyText || "(no reply)";
+          // Done — text response. A reply can come back empty when the model
+          // spends the whole budget thinking, so say what happened.
+          const reply = replyText || (data.stop_reason === "max_tokens"
+            ? "I ran out of room before finishing that one. Ask again, or narrow it to a single lift or muscle group."
+            : "(no reply)");
           setMessages(m => [...m, { role:"assistant", content: reply, toolCalls: collectedToolCalls.slice() }]);
           setLoading(false);
           return;

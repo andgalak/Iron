@@ -13,8 +13,8 @@
 //    huge (expensive) response.
 
 // Only these models may be requested. Add to the set when the client changes.
-const ALLOWED_MODELS = new Set(["claude-opus-5"]);
-const DEFAULT_MODEL = "claude-opus-5";
+const ALLOWED_MODELS = new Set(["claude-opus-5-5", "claude-opus-5"]);
+const DEFAULT_MODEL = "claude-opus-5-5";
 
 // Hard ceiling on the response length we'll pay for (the client asks for 2000).
 const MAX_TOKENS_CAP = 4000;
@@ -25,7 +25,7 @@ const MAX_BODY_CHARS = 600_000;
 
 // Fields we pass through to Anthropic. Anything else in the body is dropped —
 // notably `stream`, which this handler can't relay.
-const FORWARDED_FIELDS = ["system", "tools", "tool_choice", "temperature", "top_p", "stop_sequences"];
+const FORWARDED_FIELDS = ["system", "tools", "tool_choice", "output_config", "thinking", "stop_sequences"];
 
 // Vercel exposes every project environment variable to serverless functions,
 // including the VITE_-prefixed pair the frontend already uses, so no new
