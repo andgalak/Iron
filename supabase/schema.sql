@@ -206,6 +206,12 @@ create policy "own rows: user_settings"
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+-- Rooney's playbook: Andrew's long-form training doctrine (preferences, injury
+-- rules, exercise tiers), uploaded from the Rooney screen and sent with every
+-- chat. It lives here under RLS, not in the repo, because the repo and the app
+-- bundle are public and the playbook carries medical history.
+alter table public.user_settings add column if not exists rooney_playbook text;
+
 -- ────────────────────────────────────────────────────────────────────────────
 -- GOAL LOGS: per-day completions for user-defined habit and timed goals.
 -- (Workout goals read the workouts table; Eat clean / Active read diet/activity

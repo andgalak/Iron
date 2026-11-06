@@ -524,6 +524,53 @@ export function useSettings(userId, defaultGoals) {
   return { goals, loading, loaded: !!userId && loadedFor === userId, setGoals, refresh };
 }
 
+// ─── ROONEY PLAYBOOK (long-form coaching doctrine) ────────────────────────────
+// Its own query rather than a column added to useSettings' select, so a missing
+// column (schema not updated yet) can never break the goals load.
+// Postgres 42703 / PostgREST PGRST204 = the rooney_playbook column isn't there.
+const MISSING_COLUMN_CODES = new Set(["42703", "PGRST204"]);
+
+export function useRooneyPlaybook(userId) {
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [setupNeeded, setSetupNeeded] = useState(false);
+  // A failed read is not "no playbook": the panel says so instead of inviting
+  // a re-upload over a playbook that is actually still there.
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!userId) { setLoading(false); return; }
+    const { data, error } = await withRetry(() => supabase.from("user_settings").select("rooney_playbook").eq("user_id", userId).maybeSingle());
+    if (error) {
+      if (MISSING_COLUMN_CODES.has(error.code)) setSetupNeeded(true);
+      else setLoadFailed(true);
+      console.error("playbook load:", error);
+      setLoading(false);
+      return;
+    }
+    setSetupNeeded(false);
+    setLoadFailed(false);
+    setText(data?.rooney_playbook || "");
+    setLoading(false);
+  }, [userId]);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  async function save(next) {
+    const { error } = await withRetry(() => supabase.from("user_settings").upsert({ user_id: userId, rooney_playbook: next, updated_at: new Date().toISOString() }));
+    if (error) {
+      if (MISSING_COLUMN_CODES.has(error.code)) setSetupNeeded(true);
+      console.error("playbook save:", error);
+      return { error };
+    }
+    setSetupNeeded(false);
+    setLoadFailed(false);
+    setText(next);
+    return { error: null };
+  }
+
+  return { text, loading, setupNeeded, loadFailed, save, refresh };
+}
+
 // ─── ROONEY CONVERSATION (persisted chat thread) ──────────────────────────────
 export function useRooneyConversation(userId) {
   const [messages, setMessages] = useState(null); // null = still loading

@@ -9,7 +9,7 @@ import { supabase, supabaseConfigured } from "./lib/supabase";
 import {
   useAuth, useWorkouts, useDietLog, useActivityLog,
   useFocusSessions, useBoards, useCustomExercises, useRooneyMemories,
-  useZone2Log, useSettings, useRooneyConversation, useGoalLogs, useGoalSnapshots, useBodyweight, migrateLocalStorage,
+  useZone2Log, useSettings, useRooneyConversation, useRooneyPlaybook, useGoalLogs, useGoalSnapshots, useBodyweight, migrateLocalStorage,
   isRetryableAuthError,
 } from "./lib/supabaseHooks";
 
@@ -3837,6 +3837,44 @@ function computeObservations({ history, dietLog, activeLog, focusSessions, goals
   return obs;
 }
 
+// ─── Rooney playbook ──────────────────────────────────────────────────────────
+// Andrew's long-form training doctrine, uploaded from the 📘 panel and stored
+// privately in Supabase (user_settings.rooney_playbook). Large enough to matter
+// per message, so it goes to the API as its own cached system block.
+const PLAYBOOK_MAX_CHARS = 150_000;
+
+// Research-tool exports wrap citations in private-use characters
+// (U+E200 cite U+E202 turn…search… U+E201). They mean nothing to Rooney and
+// cost tokens on every message, so strip them and any stray private-use chars.
+function cleanPlaybook(raw) {
+  const s = String(raw || "");
+  const removed = (s.match(/\uE200[^\uE201]*\uE201/g) || []).length;
+  const text = s
+    .replace(/[ \t]*\uE200[^\uE201]*\uE201/g, "")
+    .replace(/[\uE000-\uF8FF]/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  return { text, removed };
+}
+
+// Stable across turns and days (it only changes when Andrew edits it), which is
+// what lets it sit in the cache ahead of the data digest that changes daily.
+function buildPlaybookBlock(playbook) {
+  return `ANDREW'S TRAINING PLAYBOOK
+Andrew wrote the document below to govern how you coach his training: what he enjoys, his injury constraints, which exercises suit him, and how to choose and progress them. Treat it as his standing instructions.
+
+How to use it:
+- On exercise selection, injury handling, and how hard to push, the playbook wins over the general coaching guidance and self-reported profile elsewhere in your instructions. If it defers a lift for an injury, don't program that lift just because his old numbers suggest he could.
+- His logged data and what he tells you in chat are the truth about what he actually did and how he feels today. If he says something has changed (an injury cleared or flared), follow him, save it with remember(), and suggest he update the playbook from the 📘 button in this chat.
+- Joint status (green / yellow / red) changes day to day. When it matters for today's session and you don't know it, ask in one short line rather than assuming.
+- Many playbook exercises aren't in the app's catalog (chest-supported row, landmine press, Pallof press, serratus wall slide and so on). In build_workout, add those as custom exercises with name, muscle and cat rather than swapping in a catalog lift the playbook ranks lower.
+- Use the playbook to decide; don't quote it back or explain the research behind it unless he asks. Your other instructions on tight mobile replies still apply.
+
+<playbook>
+${playbook}
+</playbook>`;
+}
+
 function buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log = [], goalLogs = [], customExercises = {}, bodyweight = {} }) {
   const today = isoDate();
   const thisWeekDays = getWeekDays(0);
@@ -3955,12 +3993,17 @@ You have tools to read his full training log (query_training_history), build wor
 - NEVER call a tool to delete or overwrite data without explicit confirmation. log_diet / log_activity overwrite existing values for that date, so confirm if a value is already set.`;
 }
 
-function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], goalLogs=[], customExercises={}, bodyweight={}, persistedMessages=null, onSaveConversation, onClearConversation, onLogWorkout, onBuildWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
+function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memories=[], goals, zone2Log=[], goalLogs=[], customExercises={}, bodyweight={}, persistedMessages=null, playbook="", playbookSetupNeeded=false, playbookLoadFailed=false, onSavePlaybook, onSaveConversation, onClearConversation, onLogWorkout, onBuildWorkout, onLogDiet, onLogActivity, onAddCard, onRemember, onForget, onDeleteMemory, onClose }) {
   const GREETING = { role:"assistant", content: "Hey Andrew. I'm Rooney. I remember our past conversations and what you tell me. I can also log past workouts, diet days, activity, Zone 2, or todo cards. What's on your mind?" };
   const [messages, setMessages] = useState(() =>
     (persistedMessages && persistedMessages.length > 0) ? persistedMessages : [GREETING]
   );
   const [showMemPanel, setShowMemPanel] = useState(false);
+  const [showPlaybook, setShowPlaybook] = useState(false);
+  const [playbookDraft, setPlaybookDraft] = useState("");
+  const [playbookNote, setPlaybookNote] = useState(null); // { text, error }
+  const [playbookSaving, setPlaybookSaving] = useState(false);
+  const playbookFileRef = useRef(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
@@ -3986,6 +4029,57 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
   function newConversation() {
     setMessages([GREETING]);
     if (onClearConversation) onClearConversation();
+  }
+
+  // If the playbook finishes loading (or changes) while the draft is untouched,
+  // show it, rather than leaving a stale empty draft that Save would write back.
+  const playbookSyncedRef = useRef(playbook);
+  useEffect(() => {
+    setPlaybookDraft(d => (d === playbookSyncedRef.current ? playbook : d));
+    playbookSyncedRef.current = playbook;
+  }, [playbook]);
+
+  function openPlaybook() {
+    setPlaybookDraft(playbook);
+    setPlaybookNote(null);
+    setShowPlaybook(true);
+  }
+
+  function saveDraft() {
+    // Emptying the box and saving is a removal; ask the same way Remove does.
+    if (!playbookDraft.trim()) { removePlaybook(); return; }
+    savePlaybookText(playbookDraft, "Saved. Rooney will use it from your next message.");
+  }
+
+  async function savePlaybookText(raw, okText) {
+    const { text, removed } = cleanPlaybook(raw);
+    if (text.length > PLAYBOOK_MAX_CHARS) {
+      setPlaybookNote({ error: true, text: `That's ${text.length.toLocaleString()} characters. Rooney reads the playbook on every message, so the limit is ${PLAYBOOK_MAX_CHARS.toLocaleString()}.` });
+      return;
+    }
+    setPlaybookSaving(true);
+    const { error } = await onSavePlaybook(text);
+    setPlaybookSaving(false);
+    if (error) { setPlaybookNote({ error: true, text: `Couldn't save: ${error.message || "unknown error"}` }); return; }
+    setPlaybookDraft(text);
+    const cleaned = removed ? ` Removed ${removed} citation marker${removed === 1 ? "" : "s"}.` : "";
+    setPlaybookNote({ error: false, text: okText + cleaned });
+  }
+
+  async function uploadPlaybook(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // so picking the same file again still fires
+    if (!file) return;
+    let raw = "";
+    try { raw = await file.text(); }
+    catch (err) { setPlaybookNote({ error: true, text: `Couldn't read that file: ${err.message || err}` }); return; }
+    if (!raw.trim()) { setPlaybookNote({ error: true, text: "That file is empty." }); return; }
+    await savePlaybookText(raw, `Saved ${file.name}. Rooney will use it from your next message.`);
+  }
+
+  async function removePlaybook() {
+    if (!window.confirm("Remove the playbook? Rooney goes back to its general coaching rules.")) return;
+    await savePlaybookText("", "Playbook removed.");
   }
 
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); }, [messages]);
@@ -4044,6 +4138,14 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
     setLoading(true);
 
     const systemPrompt = buildRooneyContext({ history, dietLog, activeLog, focusSessions, boards, memories, goals, zone2Log, goalLogs, customExercises, bodyweight });
+    // Cache order is tools -> system -> messages, and a change anywhere in the
+    // prefix invalidates what follows. The playbook rarely changes, so it goes
+    // first with its own breakpoint and stays cached when the digest (dates,
+    // live numbers) changes after it.
+    const systemBlocks = [
+      ...(playbook ? [{ type: "text", text: buildPlaybookBlock(playbook), cache_control: { type: "ephemeral" } }] : []),
+      { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
+    ];
 
     // Convert displayed messages into API messages (drop UI-only fields).
     // Cap to the last 40 turns so a long thread stays affordable + within limits.
@@ -4087,9 +4189,9 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
             // it room and keep effort low: this is a phone chat, not research.
             max_tokens: 4000,
             output_config: { effort: "low" },
-            // The prompt now carries the full training digest; caching it keeps
-            // tool-use rounds and follow-up messages cheap while data is unchanged.
-            system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
+            // Caching the playbook and the full training digest keeps tool-use
+            // rounds and follow-up messages cheap while they're unchanged.
+            system: systemBlocks,
             tools: ROONEY_TOOLS,
             messages: apiMessages,
           }),
@@ -4173,9 +4275,10 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
           <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#FF6B35,#38bdf8)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#000",fontFamily:"monospace",flexShrink:0}}>R</div>
           <div style={{flex:1}}>
             <div style={{fontSize:14,fontWeight:700,color:"#e8e8e8",fontFamily:"monospace"}}>Rooney</div>
-            <div style={{fontSize:10,color:"#444",fontFamily:"monospace"}}>Your personal coach · {memories.length} memor{memories.length===1?"y":"ies"}</div>
+            <div style={{fontSize:10,color:"#444",fontFamily:"monospace"}}>Your personal coach · {memories.length} memor{memories.length===1?"y":"ies"}{playbook ? " · playbook" : ""}</div>
           </div>
           <button title="Start a new conversation" style={{background:"transparent",border:"none",color:"#666",fontSize:11,cursor:"pointer",fontFamily:"monospace",lineHeight:1,marginRight:6}} onClick={newConversation}>New</button>
+          <button title="Rooney's training playbook" style={{background:"transparent",border:"none",fontSize:18,cursor:"pointer",lineHeight:1,marginRight:4,opacity:playbook?1:0.35,filter:playbook?"none":"grayscale(1)"}} onClick={openPlaybook}>📘</button>
           <button title="What Rooney remembers about you" style={{background:"transparent",border:"none",color:memories.length>0?"#FF6B35":"#444",fontSize:18,cursor:"pointer",lineHeight:1,marginRight:4}} onClick={()=>setShowMemPanel(true)}>🧠</button>
           <button style={{background:"transparent",border:"none",color:"#444",fontSize:20,cursor:"pointer",lineHeight:1}} onClick={onClose}>✕</button>
         </div>
@@ -4207,6 +4310,55 @@ function RooneyChat({ history, dietLog, activeLog, focusSessions, boards, memori
                       ))}
                     </div>
                   ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showPlaybook && (
+          <div onClick={()=>setShowPlaybook(false)} style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.85)",zIndex:5,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:60}}>
+            <div onClick={e=>e.stopPropagation()} style={{width:"calc(100% - 24px)",maxWidth:440,maxHeight:"calc(82vh - 80px)",background:"#0d0d0d",border:"1px solid #2a2a2a",borderRadius:14,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 16px",borderBottom:"1px solid #1a1a1a"}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:"#e8e8e8",fontFamily:"monospace"}}>📘 Rooney's playbook</div>
+                  <div style={{fontSize:10,color:"#555",fontFamily:"monospace",marginTop:2}}>Your training rules. Sent with every message. Private to your account.</div>
+                </div>
+                <button style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}} onClick={()=>setShowPlaybook(false)}>✕</button>
+              </div>
+              <div style={{overflowY:"auto",padding:"12px 14px 16px",display:"flex",flexDirection:"column",gap:10}}>
+                {playbookSetupNeeded ? (
+                  <div style={{fontSize:12,color:"#cfcfcf",fontFamily:"monospace",lineHeight:1.6}}>
+                    <div style={{color:"#FF6B35",fontWeight:700,marginBottom:6}}>One-time setup needed</div>
+                    The database doesn't have a place for the playbook yet. In Supabase, open SQL Editor, paste this, and press Run. Then refresh the app.
+                    <pre style={{userSelect:"all",whiteSpace:"pre-wrap",wordBreak:"break-all",background:"#161616",border:"1px solid #222",borderRadius:8,padding:10,marginTop:8,fontSize:11,color:"#e8e8e8"}}>alter table public.user_settings add column if not exists rooney_playbook text;</pre>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{fontSize:11,color:playbook?"#9a9a9a":"#555",fontFamily:"monospace",lineHeight:1.5}}>
+                      {playbook
+                        // ~4 characters per token is close enough for a size hint.
+                        ? `Loaded: ${playbook.split("\n").length.toLocaleString()} lines, about ${Math.max(100, Math.round(playbook.length / 400) * 100).toLocaleString()} tokens.`
+                        : playbookLoadFailed
+                          ? <span style={{color:"#dc2626"}}>Couldn't load your playbook (connection problem). It's still saved. Close Rooney and refresh the app to try again.</span>
+                          : "No playbook yet. Upload a .md or .txt file, or paste text below and save."}
+                    </div>
+                    <input ref={playbookFileRef} type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" onChange={uploadPlaybook} style={{display:"none"}}/>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                      <button disabled={playbookSaving} onClick={()=>playbookFileRef.current?.click()} style={{background:"#FF6B35",color:"#000",border:"none",borderRadius:8,padding:"8px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"monospace"}}>{playbook ? "Replace with file" : "Upload file"}</button>
+                      {playbookDraft !== playbook && (
+                        <button disabled={playbookSaving} onClick={saveDraft} style={{background:"transparent",color:"#FF6B35",border:"1px solid #FF6B35",borderRadius:8,padding:"8px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"monospace"}}>Save changes</button>
+                      )}
+                      {playbook && (
+                        <button disabled={playbookSaving} onClick={removePlaybook} style={{background:"transparent",color:"#666",border:"1px solid #2a2a2a",borderRadius:8,padding:"8px 12px",fontSize:11,cursor:"pointer",fontFamily:"monospace",marginLeft:"auto"}}>Remove</button>
+                      )}
+                    </div>
+                    {(playbookSaving || playbookNote) && (
+                      <div style={{fontSize:11,color:!playbookSaving&&playbookNote?.error?"#dc2626":"#4ade80",fontFamily:"monospace",lineHeight:1.5}}>{playbookSaving ? "Saving…" : playbookNote.text}</div>
+                    )}
+                    <textarea value={playbookDraft} onChange={e=>{setPlaybookDraft(e.target.value); setPlaybookNote(null);}} placeholder="Paste or write your playbook here…" spellCheck={false}
+                      style={{width:"100%",boxSizing:"border-box",minHeight:"40vh",resize:"vertical",background:"#161616",color:"#cfcfcf",border:"1px solid #222",borderRadius:8,padding:10,fontSize:11,lineHeight:1.5,fontFamily:"monospace"}}/>
+                  </>
                 )}
               </div>
             </div>
@@ -4663,6 +4815,7 @@ export default function App() {
   const zone2State    = useZone2Log(userId);
   const settingsState = useSettings(userId, DEFAULT_GOAL_LIST);
   const convoState    = useRooneyConversation(userId);
+  const playbookState = useRooneyPlaybook(userId);
   const goalLogsState = useGoalLogs(userId);
   const goalSnapsState = useGoalSnapshots(userId);
   const bwState       = useBodyweight(userId);
@@ -5260,6 +5413,10 @@ export default function App() {
           customExercises={customExercises}
           bodyweight={bwState.data}
           persistedMessages={convoState.messages}
+          playbook={playbookState.text}
+          playbookSetupNeeded={playbookState.setupNeeded}
+          playbookLoadFailed={playbookState.loadFailed}
+          onSavePlaybook={playbookState.save}
           onSaveConversation={convoState.save}
           onClearConversation={convoState.clear}
           onLogWorkout={rooneyLogWorkout}
